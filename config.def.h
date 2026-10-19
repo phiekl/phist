@@ -9,12 +9,12 @@ static char *font = "Liberation Mono:pixelsize=12:antialias=true:autohint=true";
 static int borderpx = 2;
 
 /*
- * What program is execed by st depends of these precedence rules:
+ * Program selection, in order of precedence:
  * 1: program passed with -e
  * 2: scroll and/or utmp
  * 3: SHELL environment variable
- * 4: value of shell in /etc/passwd
- * 5: value of shell in config.h
+ * 4: shell from /etc/passwd
+ * 5: shell configured below
  */
 static char *shell = "/bin/sh";
 char *utmp = NULL;
@@ -48,10 +48,9 @@ int allowaltscreen = 1;
 int allowwindowops = 0;
 
 /*
- * draw latency range in ms - from new content/keypress/etc until drawing.
- * within this range, st draws when content stops arriving (idle). mostly it's
- * near minlatency, but it waits longer for slow updates to avoid partial draw.
- * low minlatency will tear/flicker more, as it can "detect" idle too early.
+ * Draw latency range in ms after output or input. Draw near minlatency when
+ * updates stop, or wait up to maxlatency during continuous output.
+ * Lower minlatency can expose partial updates and cause flicker.
  */
 static double minlatency = 2;
 static double maxlatency = 33;
@@ -74,22 +73,12 @@ static unsigned int cursorthickness = 2;
 static int bellvolume = 0;
 
 /* default TERM value */
-char *termname = "st-256color";
+char *termname = "phist-256color";
 
 /*
- * spaces per tab
- *
- * When you are changing this value, don't forget to adapt the »it« value in
- * the st.info and appropriately install the st.info in the environment where
- * you use this st version.
- *
- *	it#$tabspaces,
- *
- * Secondly make sure your kernel is not expanding tabs. When running `stty
- * -a` »tab0« should appear. You can tell the terminal to not expand tabs by
- *  running following command:
- *
- *	stty tabs
+ * Spaces per tab. Keep st.info's it capability in sync and reinstall it
+ * wherever this terminal is used. Disable kernel tab expansion with stty tabs
+ * (stty -a should show tab0).
  */
 unsigned int tabspaces = 8; /* must be > 0 */
 
@@ -219,7 +208,7 @@ static Shortcut shortcuts[] = {
  * * > 0: cursor application mode enabled
  * * < 0: cursor application mode disabled
  *
- * Be careful with the order of the definitions because st searches in
+ * Be careful with the order of the definitions because phist searches in
  * this table sequentially, so any XK_ANY_MOD must be in the last
  * position for a key.
  */
