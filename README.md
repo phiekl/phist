@@ -2,6 +2,10 @@
 
 phist is an X11 terminal emulator forked from [st](https://st.suckless.org/).
 
+## Features
+
+- [Local configuration and clean build outputs](doc/building.md).
+
 ## Build
 
 Requires a C compiler, make, pkg-config, development libraries for Xlib, Xft,
@@ -33,6 +37,8 @@ as needed. `make uninstall` removes the binary and manual.
 Edit `config.h` and rebuild. The first build copies it from `config.def.h`. To
 adopt updated defaults, save any local changes, remove `config.h`, then run
 `make clean` and `make`.
+
+See [the documentation](doc/index.md) for usage, settings and tests.
 
 ## License
 

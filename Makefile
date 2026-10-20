@@ -28,7 +28,7 @@ clean:
 
 dist: clean
 	mkdir -p phist-$(VERSION)
-	cp -R LEGACY LICENSE Makefile README.md config.mk\
+	cp -R LEGACY LICENSE Makefile README.md config.mk doc\
 		config.def.h st.info st.1 arg.h st.h win.h $(SRC)\
 		phist-$(VERSION)
 	tar -cf - phist-$(VERSION) | gzip > phist-$(VERSION).tar.gz
