@@ -21,6 +21,12 @@ region below the top margin, deleting lines and explicit scroll-up requests
 do not add rows. The oldest retained rows are evicted when the limit is
 reached; a limit of zero disables retention.
 
+Shift+PageUp and Shift+PageDown scroll by one screen minus one row, with a
+minimum of one row. They also scroll main-screen history while an
+alternate-screen program is active, so that program never receives these
+keys. In configured scroll actions, a negative distance is relative to the
+current screen height.
+
 ## Resize behavior
 
 Soft-wrapped rows belong to one logical line, which is rewrapped to fit the

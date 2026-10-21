@@ -2838,7 +2838,7 @@ kscrolldown(const Arg *arg)
 	Arg a;
 
 	/* Negative arguments scroll by the screen height minus that many lines. */
-	a.i = -arg->i;
+	a.i = -(arg->i < 0 ? MAX(1, term.row + arg->i) : arg->i);
 	kscroll(&a);
 }
 
@@ -2847,7 +2847,7 @@ kscrollup(const Arg *arg)
 {
 	Arg a;
 
-	a.i = arg->i;
+	a.i = arg->i < 0 ? MAX(1, term.row + arg->i) : arg->i;
 	kscroll(&a);
 }
 
