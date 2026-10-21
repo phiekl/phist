@@ -33,6 +33,7 @@ enum glyph_attribute {
 	ATTR_WRAP       = 1 << 8,
 	ATTR_WIDE       = 1 << 9,
 	ATTR_WDUMMY     = 1 << 10,
+	ATTR_WPAD       = 1 << 16, /* padding before a wide glyph on the next row */
 	ATTR_BOLD_FAINT = ATTR_BOLD | ATTR_FAINT,
 };
 
@@ -62,7 +63,7 @@ typedef uint_least32_t Rune;
 #define Glyph Glyph_
 typedef struct {
 	Rune u;           /* character code */
-	ushort mode;      /* attribute flags */
+	uint32_t mode;    /* attribute flags */
 	uint32_t fg;      /* foreground  */
 	uint32_t bg;      /* background  */
 } Glyph;
@@ -79,6 +80,7 @@ typedef union {
 
 void die(const char *, ...);
 void redraw(void);
+void tfulldirt(void);
 void draw(void);
 
 void printscreen(const Arg *);
@@ -111,6 +113,9 @@ void *xmalloc(size_t);
 void *xrealloc(void *, size_t);
 char *xstrdup(const char *);
 
+void kscrollup(const Arg *arg);
+void kscrolldown(const Arg *arg);
+
 /* config.h globals */
 extern char *utmp;
 extern char *scroll;
@@ -124,3 +129,4 @@ extern unsigned int tabspaces;
 extern unsigned int defaultfg;
 extern unsigned int defaultbg;
 extern unsigned int defaultcs;
+extern unsigned int scrollback_lines;

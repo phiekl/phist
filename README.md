@@ -5,6 +5,8 @@ phist is an X11 terminal emulator forked from [st](https://st.suckless.org/).
 ## Features
 
 - [Local configuration and clean build outputs](doc/building.md).
+- [Scrollback with resize reflow](doc/scrollback.md), including
+  alternate-screen access.
 
 ## Build
 

@@ -252,6 +252,7 @@ static char *opt_line  = NULL;
 static char *opt_name  = NULL;
 static char *opt_title = NULL;
 
+static int pendingw, pendingh; /* latest unapplied ConfigureNotify size */
 static uint buttons; /* bit field of pressed buttons */
 
 void
@@ -471,6 +472,21 @@ bpress(XEvent *e)
 	int btn = e->xbutton.button;
 	struct timespec now;
 	int snap;
+
+	if (btn == Button4 || btn == Button5) {
+		Arg a;
+		if (IS_SET(MODE_MOUSE) && !(e->xbutton.state & forcemousemod)) {
+			mousereport(e);
+			return;
+		}
+		a.i = MAX(1, mousescrolllines);
+		if (btn == Button4) {
+			kscrollup(&a);
+		} else {
+			kscrolldown(&a);
+		}
+		return;
+	}
 
 	if (1 <= btn && btn <= 11)
 		buttons |= 1 << (btn-1);
@@ -755,6 +771,8 @@ xresize(int col, int row)
 			DefaultDepth(xw.dpy, xw.scr));
 	XftDrawChange(xw.draw, xw.buf);
 	xclear(0, 0, win.w, win.h);
+	/* The new buffer is blank, even when the rows and columns are unchanged. */
+	tfulldirt();
 
 	/* resize to new width */
 	xw.specbuf = xrealloc(xw.specbuf, col * sizeof(GlyphFontSpec));
@@ -1246,7 +1264,7 @@ int
 xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x, int y)
 {
 	float winx = borderpx + x * win.cw, winy = borderpx + y * win.ch, xp, yp;
-	ushort mode, prevmode = USHRT_MAX;
+	uint32_t mode, prevmode = UINT32_MAX;
 	Font *font = &dc.font;
 	int frcflags = FRC_NORMAL;
 	float runewidth = win.cw;
@@ -1264,7 +1282,7 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 		mode = glyphs[i].mode;
 
 		/* Skip dummy wide-character spacing. */
-		if (mode == ATTR_WDUMMY)
+		if (mode & ATTR_WDUMMY)
 			continue;
 
 		/* Determine font for glyph if different from previous glyph. */
@@ -1272,7 +1290,8 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 			prevmode = mode;
 			font = &dc.font;
 			frcflags = FRC_NORMAL;
-			runewidth = win.cw * ((mode & ATTR_WIDE) ? 2.0f : 1.0f);
+			runewidth = win.cw *
+				((mode & ATTR_WIDE) && win.tw > win.cw ? 2.0f : 1.0f);
 			if ((mode & ATTR_ITALIC) && (mode & ATTR_BOLD)) {
 				font = &dc.ibfont;
 				frcflags = FRC_ITALICBOLD;
@@ -1377,7 +1396,7 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 void
 xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, int y)
 {
-	int charlen = len * ((base.mode & ATTR_WIDE) ? 2 : 1);
+	int charlen = len * ((base.mode & ATTR_WIDE) && win.tw > win.cw ? 2 : 1);
 	int winx = borderpx + x * win.cw, winy = borderpx + y * win.ch,
 	    width = charlen * win.cw;
 	Color *fg, *bg, *temp, revfg, revbg, truefg, truebg;
@@ -1665,7 +1684,7 @@ xdrawline(Line line, int x1, int y1, int x2)
 	i = ox = 0;
 	for (x = x1; x < x2 && i < numspecs; x++) {
 		new = line[x];
-		if (new.mode == ATTR_WDUMMY)
+		if (new.mode & ATTR_WDUMMY)
 			continue;
 		if (selected(x, y1))
 			new.mode ^= ATTR_REVERSE;
@@ -1710,6 +1729,12 @@ xximspot(int x, int y)
 void
 expose(XEvent *ev)
 {
+	/*
+	 * A pending resize is applied once before run() draws the whole window,
+	 * so drawing now would show a stale frame and reflowing would repeat.
+	 */
+	if (pendingw)
+		return;
 	redraw();
 }
 
@@ -1917,10 +1942,23 @@ cmessage(XEvent *e)
 void
 resize(XEvent *e)
 {
-	if (e->xconfigure.width == win.w && e->xconfigure.height == win.h)
-		return;
+	/*
+	 * Resizing may reflow the whole history, so dragging a window edge
+	 * applies only the latest size once drawing is due (see run()).
+	 */
+	pendingw = e->xconfigure.width;
+	pendingh = e->xconfigure.height;
+}
 
-	cresize(e->xconfigure.width, e->xconfigure.height);
+static void
+applyresize(void)
+{
+	if (!pendingw || (pendingw == win.w && pendingh == win.h)) {
+		pendingw = pendingh = 0;
+		return;
+	}
+	cresize(pendingw, pendingh);
+	pendingw = pendingh = 0;
 }
 
 void
@@ -2007,6 +2045,7 @@ run(void)
 		}
 
 		/* idle detected or maxlatency exhausted -> draw */
+		applyresize();
 		timeout = -1;
 		if (blinktimeout && tattrset(ATTR_BLINK)) {
 			timeout = blinktimeout - TIMEDIFF(now, lastblink);
