@@ -1,5 +1,18 @@
 #include "terminal.h"
 
+static void
+expectsel(int col, int row, const char *want)
+{
+	char *got;
+
+	selstart(col, row, SNAP_LINE);
+	selextend(col, row, SEL_REGULAR, 1);
+	got = getsel();
+	assert(got && !strcmp(got, want));
+	free(got);
+	selclear();
+}
+
 int
 main(void)
 {
@@ -63,6 +76,45 @@ main(void)
 		selclear();
 	}
 
-	puts("PASS: history excludes regional scrolling, deletions and explicit SU, and stores trimmed lines");
+	/* On the alternate screen, scrolling reveals the main screen, then history. */
+	{
+		Arg up = { .i = 1 }, far = { .i = 1000 };
+
+		reset(8, 3);
+		put("h1\r\nh2\r\nm1\r\nm2\r\nwrapping");
+		assert(sb.len == 2);
+		put("\033[?1049h\033[Ha1\r\na2\r\na3");
+		assert(renderline(0) == term.line[0]);
+		kscrollup(&up);
+		assert(renderline(0)[0].u == 'w' && renderline(1)[1].u == '1');
+		assert(renderline(2)[1].u == '2');
+		kscrollup(&far);
+		assert(sb.view_offset == sb.len + term.row);
+		assert(renderline(0)[1].u == '1' && renderline(2)[0].u == 'm');
+		/* Main-screen rows never wrap onto the alternate screen. */
+		term.alt[term.row - 1][term.col - 1].mode |= ATTR_WRAP;
+		sb.view_offset = 1;
+		assert(viewline(0)[0].u == 'w' && !(viewline(0)[term.col - 1].mode & ATTR_WRAP));
+		assert(term.alt[term.row - 1][term.col - 1].mode & ATTR_WRAP);
+		expectsel(1, 1, "a1\n");
+		/* Output keeps the view; typing returns to the live screen. */
+		put("x");
+		assert(sb.view_offset == 1);
+		ttyinput("", 0, 0);
+		assert(sb.view_offset == 1);
+		kscrolldown(&far);
+		assert(sb.view_offset == 0 && renderline(0) == term.line[0]);
+		/* Leaving the alternate screen keeps the same history rows in view. */
+		kscrollup(&far);
+		put("\033[?1049l");
+		assert(sb.view_offset == sb.len && renderline(0)[1].u == '1');
+		put("\033[?1049h");
+		assert(sb.view_offset == sb.len + term.row);
+		sb.view_offset = 2;
+		put("\033[?1049l");
+		assert(sb.view_offset == 0);
+	}
+
+	puts("PASS: history excludes regional scrolling, deletions and explicit SU, stores trimmed lines and shows beneath the alternate screen");
 	return 0;
 }

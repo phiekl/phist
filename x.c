@@ -254,6 +254,12 @@ static char *opt_title = NULL;
 
 static int pendingw, pendingh; /* latest unapplied ConfigureNotify size */
 static uint buttons; /* bit field of pressed buttons */
+static void
+sendinput(const char *text, size_t len, int may_echo)
+{
+	ttyinput(text, len, may_echo);
+}
+
 
 void
 clipcopy(const Arg *dummy)
@@ -326,7 +332,7 @@ zoomreset(const Arg *arg)
 void
 ttysend(const Arg *arg)
 {
-	ttywrite(arg->s, strlen(arg->s), 1);
+	sendinput(arg->s, strlen(arg->s), 1);
 }
 
 int
@@ -604,10 +610,10 @@ selnotify(XEvent *e)
 		}
 
 		if (IS_SET(MODE_BRCKTPASTE) && ofs == 0)
-			ttywrite("\033[200~", 6, 0);
-		ttywrite((char *)data, nitems * format / 8, 1);
+			sendinput("\033[200~", 6, 0);
+		sendinput((char *)data, nitems * format / 8, 1);
 		if (IS_SET(MODE_BRCKTPASTE) && rem == 0)
-			ttywrite("\033[201~", 6, 0);
+			sendinput("\033[201~", 6, 0);
 		XFree(data);
 		/* number of 32-bit chunks returned */
 		ofs += nitems * format / 32;
@@ -1897,7 +1903,7 @@ kpress(XEvent *ev)
 
 	/* 2. custom keys from config.h */
 	if ((customkey = kmap(ksym, e->state))) {
-		ttywrite(customkey, strlen(customkey), 1);
+		sendinput(customkey, strlen(customkey), 1);
 		return;
 	}
 
@@ -1916,7 +1922,7 @@ kpress(XEvent *ev)
 			len = 2;
 		}
 	}
-	ttywrite(buf, len, 1);
+	sendinput(buf, len, 1);
 }
 
 void

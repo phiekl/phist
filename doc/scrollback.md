@@ -6,9 +6,10 @@ Keep earlier output accessible and rewrap it when the window changes size.
 
 The main screen retains up to 65,536 history rows by default, controlled by
 `scrollback_lines`. The mouse wheel scrolls five rows per step;
-`mousescrolllines` changes that distance. Anything sent to the shell,
-whether typed input or a reply to a query, returns the view to the live
-screen.
+`mousescrolllines` changes that distance. Nonempty user input returns the
+view to the live screen. Automatic protocol replies and empty input leave
+the history view in place, and returning to the live screen keeps a
+selection with its text.
 
 While an alternate-screen program is running, scrolling back first reveals
 the main screen it covered, then older history. Switching screens keeps the

@@ -1380,15 +1380,24 @@ ttyread(void)
 }
 
 void
+ttyinput(const char *s, size_t n, int may_echo)
+{
+	uint64_t oldstart = sb_view_start();
+
+	if (n && sb.view_offset > 0) {
+		sb.view_offset = 0;
+		/* Like other view changes, keep a selection with its text. */
+		selscrollback(sb_startdelta(oldstart, sb_view_start()));
+		sb_view_changed();
+	}
+	ttywrite(s, n, may_echo);
+}
+
+void
 ttywrite(const char *s, size_t n, int may_echo)
 {
 	const char *next;
 
-	if (n && sb.view_offset > 0) {
-		selclear();
-		sb.view_offset = 0;
-		sb_view_changed();
-	}
 	if (may_echo && IS_SET(MODE_ECHO))
 		twrite(s, n, 1);
 
@@ -2525,7 +2534,7 @@ osc_color_response(int num, int index, int is_osc4)
 		        n < 0 ? "snprintf failed" : "truncation occurred",
 		        is_osc4 ? "osc4" : "osc");
 	} else {
-		ttywrite(buf, n, 1);
+		ttywrite(buf, n, 0);
 	}
 }
 
