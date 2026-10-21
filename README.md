@@ -13,8 +13,8 @@ Fontconfig and FreeType, and `tic` from ncurses.
 
 ```sh
 make
-tic -sx -o "$HOME/.terminfo" st.info
-./phist
+make terminfo
+TERMINFO="$PWD/.terminfo" ./phist
 ```
 
 The executable is `phist` and the default `TERM` is `phist-256color`. The
@@ -28,9 +28,16 @@ when applications there need them.
 make install
 ```
 
-This installs `phist` and `phist(1)` under `/usr/local` by default, and runs
-`tic -sx st.info`. Adjust `PREFIX` in `config.mk` or on the make command line
-as needed. `make uninstall` removes the binary and manual.
+This installs `phist` and `phist(1)` under `/usr/local` by default, and
+copies the compiled `.terminfo` entries into `/etc/terminfo`, regardless of
+`PREFIX`. `make terminfo` compiles `st.info` into the working directory's
+`.terminfo` directory; `make install` uses the same target and reuses its
+output until `st.info` changes. `make clean` removes the local entries.
+
+Adjust `PREFIX` in `config.mk` or on the make command line as needed.
+`DESTDIR` applies to the binary, manual and terminfo entries for staged
+installs. `make uninstall` removes the binary and manual, but not the
+installed terminfo entries.
 
 ## Configure
 

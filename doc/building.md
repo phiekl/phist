@@ -24,10 +24,16 @@ by Git. Versioned configuration belongs in `config.def.h`.
 
 ## Terminal type
 
-The configured default is `TERM=phist-256color`. Compile and install the entries
-from `st.info` with `tic -sx -o "$HOME/.terminfo" st.info`, or use
-`make install`. The source filename stays `st.info`; its entries are
-st's, renamed: `phist`, `phist-mono`, `phist-256color`, `phist-meta`,
+The configured default is `TERM=phist-256color`. Run `make terminfo` to
+compile `st.info` into `.terminfo` in the working directory. For a local
+run, use `TERMINFO="$PWD/.terminfo" ./phist` so applications find these
+entries even after changing directory.
+
+`make install` depends on the same target and copies its output into
+`/etc/terminfo`, honoring `DESTDIR` for staged installs. The local entries
+are rebuilt only when missing or when `st.info` changes; `make clean`
+removes them. The source filename stays `st.info`; its entries are st's,
+renamed: `phist`, `phist-mono`, `phist-256color`, `phist-meta`,
 `phist-meta-256color`, `phist-bs` and `phist-bs-256color`.
 
 `phist` advertises 8 colors and `phist-256color` 256 colors, while
