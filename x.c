@@ -252,11 +252,55 @@ static char *opt_line  = NULL;
 static char *opt_name  = NULL;
 static char *opt_title = NULL;
 
-static int pendingw, pendingh; /* latest unapplied ConfigureNotify size */
 static uint buttons; /* bit field of pressed buttons */
+static int pendingw, pendingh; /* latest unapplied ConfigureNotify size */
+static int cursorblinks = 0;
+static struct timespec lastblink;
+
+static void
+blinkresetat(struct timespec now)
+{
+	lastblink = now;
+	if (IS_SET(MODE_BLINK)) {
+		win.mode &= ~MODE_BLINK;
+		tsetdirtattr(ATTR_BLINK);
+	}
+}
+
+static void
+blinkreset(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	blinkresetat(now);
+}
+
+static double
+blinkremaining(struct timespec now)
+{
+	double remain;
+
+	/* Only a focused, visible cursor needs blink wakeups. */
+	if (!blinktimeout || !((cursorblinks && IS_SET(MODE_FOCUSED) &&
+	    !IS_SET(MODE_HIDE)) || tattrset(ATTR_BLINK)))
+		return -1;
+	remain = blinktimeout - TIMEDIFF(now, lastblink);
+	if (remain <= 0) {
+		if (-remain > blinktimeout)
+			win.mode |= MODE_BLINK;
+		win.mode ^= MODE_BLINK;
+		tsetdirtattr(ATTR_BLINK);
+		lastblink = now;
+		return blinktimeout;
+	}
+	return remain;
+}
 static void
 sendinput(const char *text, size_t len, int may_echo)
 {
+	if (len)
+		blinkreset();
 	ttyinput(text, len, may_echo);
 }
 
@@ -1586,28 +1630,43 @@ xdrawcursor(int cx, int cy, Glyph g, int ox, int oy, Glyph og)
 	/* draw the new one */
 	if (IS_SET(MODE_FOCUSED)) {
 		switch (win.cursor) {
-		case 7: /* st extension */
-			g.u = 0x2603; /* snowman (U+2603) */
+		default:
+		case 0: /* blinking block */
+		case 1: /* blinking block (default) */
+			if (IS_SET(MODE_BLINK))
+				break;
 			/* FALLTHROUGH */
-		case 0: /* Blinking Block */
-		case 1: /* Blinking Block (Default) */
-		case 2: /* Steady Block */
+		case 2: /* steady block */
 			xdrawglyph(g, cx, cy);
 			break;
-		case 3: /* Blinking Underline */
-		case 4: /* Steady Underline */
+		case 3: /* blinking underline */
+			if (IS_SET(MODE_BLINK))
+				break;
+			/* FALLTHROUGH */
+		case 4: /* steady underline */
 			XftDrawRect(xw.draw, &drawcol,
 					borderpx + cx * win.cw,
 					borderpx + (cy + 1) * win.ch - \
 						cursorthickness,
 					win.cw, cursorthickness);
 			break;
-		case 5: /* Blinking bar */
-		case 6: /* Steady bar */
+		case 5: /* blinking bar */
+			if (IS_SET(MODE_BLINK))
+				break;
+			/* FALLTHROUGH */
+		case 6: /* steady bar */
 			XftDrawRect(xw.draw, &drawcol,
 					borderpx + cx * win.cw,
 					borderpx + cy * win.ch,
 					cursorthickness, win.ch);
+			break;
+		case 7: /* blinking phist cursor */
+			if (IS_SET(MODE_BLINK))
+				break;
+			/* FALLTHROUGH */
+		case 8: /* steady phist cursor */
+			g.u = stcursor;
+			xdrawglyph(g, cx, cy);
 			break;
 		}
 	} else {
@@ -1777,9 +1836,15 @@ xsetmode(int set, unsigned int flags)
 int
 xsetcursor(int cursor)
 {
-	if (!BETWEEN(cursor, 0, 7)) /* 7: st extension */
+	if (!BETWEEN(cursor, 0, 8)) /* 7-8: phist extensions */
 		return 1;
+	/* DECSCUSR 0 requests the default style rather than a blinking block. */
+	if (cursor == 0 && BETWEEN(cursorstyle, 1, 8))
+		cursor = cursorstyle;
 	win.cursor = cursor;
+	cursorblinks = win.cursor == 0 || win.cursor == 1 ||
+	               win.cursor == 3 || win.cursor == 5 ||
+	               win.cursor == 7;
 	return 0;
 }
 
@@ -1817,6 +1882,7 @@ focus(XEvent *ev)
 		if (xw.ime.xic)
 			XSetICFocus(xw.ime.xic);
 		win.mode |= MODE_FOCUSED;
+		blinkreset(); /* show the cursor at once, then resume blinking */
 		xseturgency(0);
 		if (IS_SET(MODE_FOCUS))
 			ttywrite("\033[I", 3, 0);
@@ -1974,7 +2040,7 @@ run(void)
 	int w = win.w, h = win.h;
 	fd_set rfd;
 	int xfd = XConnectionNumber(xw.dpy), ttyfd, xev, drawing;
-	struct timespec seltv, *tv, now, lastblink, trigger;
+	struct timespec seltv, *tv, now, trigger;
 	double timeout;
 
 	/* Waiting for window mapping */
@@ -1996,7 +2062,8 @@ run(void)
 	ttyfd = ttynew(opt_line, shell, opt_io, opt_cmd);
 	cresize(w, h);
 
-	for (timeout = -1, drawing = 0, lastblink = (struct timespec){0};;) {
+	clock_gettime(CLOCK_MONOTONIC, &lastblink);
+	for (timeout = -1, drawing = 0;;) {
 		FD_ZERO(&rfd);
 		FD_SET(ttyfd, &rfd);
 		FD_SET(xfd, &rfd);
@@ -2052,18 +2119,7 @@ run(void)
 
 		/* idle detected or maxlatency exhausted -> draw */
 		applyresize();
-		timeout = -1;
-		if (blinktimeout && tattrset(ATTR_BLINK)) {
-			timeout = blinktimeout - TIMEDIFF(now, lastblink);
-			if (timeout <= 0) {
-				if (-timeout > blinktimeout) /* start visible */
-					win.mode |= MODE_BLINK;
-				win.mode ^= MODE_BLINK;
-				tsetdirtattr(ATTR_BLINK);
-				lastblink = now;
-				timeout = blinktimeout;
-			}
-		}
+		timeout = blinkremaining(now);
 
 		draw();
 		XFlush(xw.dpy);
@@ -2089,7 +2145,7 @@ main(int argc, char *argv[])
 {
 	xw.l = xw.t = 0;
 	xw.isfixed = False;
-	xsetcursor(cursorshape);
+	xsetcursor(cursorstyle);
 
 	ARGBEGIN {
 	case 'a':
