@@ -1039,6 +1039,41 @@ tclearurlflash(void)
 	tfulldirt();
 }
 
+static void
+sb_preserve_screen(void)
+{
+	int y, last = term.row - 1;
+	HistoryLine *hl;
+	uint64_t oldstart = sb_view_start();
+
+	/* Avoid adding a screenful of empty rows after every clear. */
+	while (last >= 0 && tlinelen(term.line[last]) == 0)
+		last--;
+	for (y = 0; y <= last; y++)
+		sb_push(term.line[y]);
+	/* A clear ends the old logical line, even if its last row was wrapped. */
+	if (last >= 0 && sb.len > 0) {
+		hl = &sb.buf[sb_phys_index(sb.len - 1)];
+		hl->cells[hl->cols - 1].mode &= ~ATTR_WRAP;
+		urls.dirty = 1;
+	}
+
+	sb.view_offset = 0;
+	/* Selected text moved to history stays selected; the clear drops the rest. */
+	selscrollback(sb_startdelta(oldstart, sb_view_start()));
+	tclearurlflash();
+	sb_view_changed();
+}
+
+static void
+sb_reset_on_clear(void)
+{
+	sb_clear();
+	sb_view_changed();
+	if (sel.ob.x != -1 && term.row > 0)
+		selclear();
+}
+
 ssize_t
 xwrite(int fd, const char *s, size_t len)
 {
@@ -2717,6 +2752,8 @@ csihandle(void)
 	case 'J': /* ED -- Clear screen */
 		switch (csiescseq.arg[0]) {
 		case 0: /* below */
+			if (!IS_SET(MODE_ALTSCREEN) && term.c.x == 0 && term.c.y == 0)
+				sb_preserve_screen();
 			tclearregion(term.c.x, term.c.y, term.col-1, term.c.y);
 			if (term.c.y < term.row-1) {
 				tclearregion(0, term.c.y+1, term.col-1,
@@ -2729,7 +2766,13 @@ csihandle(void)
 			tclearregion(0, term.c.y, term.c.x, term.c.y);
 			break;
 		case 2: /* all */
+			if (!IS_SET(MODE_ALTSCREEN))
+				sb_preserve_screen();
 			tclearregion(0, 0, term.col-1, term.row-1);
+			break;
+		case 3:
+			if (!IS_SET(MODE_ALTSCREEN))
+				sb_reset_on_clear();
 			break;
 		default:
 			goto unknown;

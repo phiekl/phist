@@ -94,3 +94,22 @@ LC_ALL=C.UTF-8 sh tests/printing.sh
 The shared helpers in `tests/terminal.h` exercise the real terminal core.
 Resize checks cover limits 0, 1, 4, 64 and 65,536, cursor mapping,
 alternate-screen modes and contents, tabs, padding and wide characters.
+
+## Clears and resets
+
+A full main-screen erase preserves its used rows in history. This covers
+`CSI 2 J` and `CSI 0 J` with the cursor at home, so `clear` and Ctrl+L leave
+the previous view accessible. Trailing empty rows are omitted. The last
+saved logical line is ended even if its final physical row was wrapped;
+later output cannot continue a URL through the clear boundary.
+
+The cursor position and scrolling margins stay intact. Partial erases keep
+their normal behavior, and alternate-screen clears do not enter history. A
+clear returns to the live view and invalidates the URL overlay. Selected
+text moved into history remains selected. At this point, `CSI 3 J` and a
+full terminal reset still discard history and end its selection.
+
+Run `LC_ALL=C.UTF-8 sh tests/clear.sh` and `LC_ALL=C.UTF-8 sh
+tests/colors.sh`. Checks cover small limits, wrapped URLs, underline
+attributes, margins and erase modes, including underline round trips through
+full-screen clearing.

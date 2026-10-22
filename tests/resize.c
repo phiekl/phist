@@ -64,6 +64,16 @@ main(int argc, char **argv)
 	line_is(term.line[0], "foo");
 	line_is(term.line[3], "x");
 
+	/* Colored blank rows below the cursor do not keep history off screen. */
+	reset(80, 6);
+	for (i = 0; i < 6; i++)
+		put("old\r\n");
+	put("\033[H\033[2Jfoo\033[31m\033[2;1H\033[J\033[m\033[1;4H");
+	tresize(80, 3);
+	assert(term.c.y == MIN(cap, 2) && term.c.x == 3);
+	line_is(term.line[term.c.y], "foo");
+	assert(sb.max_width == 3);
+
 	if (wcwidth(0x754C) == 2) {
 		/* Output wrapping a wide glyph is soft wrapping too. */
 		reset(5, 8);

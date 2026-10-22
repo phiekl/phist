@@ -51,7 +51,7 @@ main(void)
 	put("\033[4:0;59mX");
 	assert(!(term.line[0][5].mode & (ATTR_UNDERLINE | ATTR_USTYLE)));
 	assert(term.line[0][5].ucolor == UCOLOR_DEFAULT);
-	put("\033[4;1H\n");
+	put("\033[2J");
 	for (i = 1; i <= 5; i++)
 		assert(USTYLE(sb_get(0)[i - 1]) == i && sb_get(0)[i - 1].ucolor == i);
 	puts("PASS: semicolon/colon RGB, color-space fields, indexed colors and malformed input");
