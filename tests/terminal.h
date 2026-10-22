@@ -15,6 +15,10 @@ const char *selectionpatterns[] = {
 int allowaltscreen = 1, allowwindowops;
 unsigned int tabspaces = 8, defaultfg = 7, defaultbg = 0, defaultcs = 7;
 unsigned int scrollback_lines = 64;
+const char *urlprefixes[] = { "http://", "https://", NULL };
+const char urlchars[] =
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	"0123456789-._~:/?#@!$&'()*+,;=%[]";
 
 void xbell(void) {}
 void xclipcopy(void) {}

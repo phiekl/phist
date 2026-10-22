@@ -357,6 +357,10 @@ sendinput(const char *text, size_t len, int may_echo)
 	ttyinput(text, len, may_echo);
 }
 
+static struct {
+	int active, col, row;
+	char *text;
+} urlclick;
 
 void
 clipcopy(const Arg *dummy)
@@ -594,6 +598,15 @@ bpress(XEvent *e)
 	if (1 <= btn && btn <= 11)
 		buttons |= 1 << (btn-1);
 
+	if (btn == Button1 && match(XK_NO_MOD, e->xbutton.state & ~LockMask) &&
+	    (urlclick.text = tgeturl(evcol(e), evrow(e)))) {
+		urlclick.active = 1;
+		urlclick.col = evcol(e);
+		urlclick.row = evrow(e);
+		selstart(urlclick.col, urlclick.row, 0);
+		return;
+	}
+
 	if (IS_SET(MODE_MOUSE) && !(e->xbutton.state & forcemousemod)) {
 		mousereport(e);
 		return;
@@ -821,6 +834,23 @@ brelease(XEvent *e)
 	if (1 <= btn && btn <= 11)
 		buttons &= ~(1 << (btn-1));
 
+	if (btn == Button1 && urlclick.active) {
+		if (urlclick.text && evcol(e) == urlclick.col && evrow(e) == urlclick.row) {
+			selclear();
+			setsel(urlclick.text, e->xbutton.time);
+			urlclick.text = NULL;
+			clipcopy(NULL);
+		} else {
+			if (urlclick.text)
+				mousesel(e, 0);
+			mousesel(e, 1);
+		}
+		free(urlclick.text);
+		urlclick.text = NULL;
+		urlclick.active = 0;
+		return;
+	}
+
 	if (IS_SET(MODE_MOUSE) && !(e->xbutton.state & forcemousemod)) {
 		mousereport(e);
 		return;
@@ -835,6 +865,15 @@ brelease(XEvent *e)
 void
 bmotion(XEvent *e)
 {
+	if (urlclick.active) {
+		if (!urlclick.text || evcol(e) != urlclick.col || evrow(e) != urlclick.row) {
+			free(urlclick.text);
+			urlclick.text = NULL;
+			mousesel(e, 0);
+		}
+		return;
+	}
+
 	if (IS_SET(MODE_MOUSE) && !(e->xbutton.state & forcemousemod)) {
 		mousereport(e);
 		return;
@@ -1700,11 +1739,16 @@ xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, i
 	/* Render the glyphs. */
 	XftDrawGlyphFontSpec(xw.draw, fg, specs, len);
 
+	/* URLs get a normal underline unless the application supplied its own. */
+	if ((base.mode & ATTR_URL) && !(base.mode & ATTR_UNDERLINE)) {
+		ustyle = 1;
+		base.ucolor = UCOLOR_DEFAULT;
+	}
 	/* Render underline and strikethrough. */
-	if ((base.mode & ATTR_UNDERLINE) && !dc.ugc)
+	if ((base.mode & (ATTR_UNDERLINE | ATTR_URL)) && !dc.ugc)
 		dc.ugc = XCreateGC(xw.dpy, XftDrawDrawable(xw.draw), 0, NULL);
 	/* Retry GC allocation on the next draw; draw text without underlines for now. */
-	if ((base.mode & ATTR_UNDERLINE) && dc.ugc) {
+	if ((base.mode & (ATTR_UNDERLINE | ATTR_URL)) && dc.ugc) {
 		const int widthThreshold  = 28;
 		int wlw = (win.ch / widthThreshold) + 1;
 		unsigned long linecolor = fg->pixel;
@@ -2050,6 +2094,8 @@ xdrawglyph(Glyph g, int x, int y)
 	int numspecs;
 	XftGlyphFontSpec spec;
 
+	if (turl(x, y))
+		g.mode |= ATTR_URL;
 	numspecs = xmakeglyphfontspecs(&spec, &g, 1, x, y);
 	xdrawglyphfontspecs(&spec, g, numspecs, x, y);
 }
@@ -2217,6 +2263,8 @@ xdrawline(Line line, int x1, int y1, int x2)
 		new = line[x];
 		if (new.mode & ATTR_WDUMMY)
 			continue;
+		if (turl(x, y1))
+			new.mode |= ATTR_URL;
 		if (selected(x, y1))
 			new.mode ^= ATTR_REVERSE;
 		if (i > 0 && ATTRCMP(base, new)) {

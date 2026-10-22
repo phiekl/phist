@@ -478,3 +478,13 @@ unsigned int scrollback_lines = 65536;
 #define UNDERCURL_SPIKY 1
 #define UNDERCURL_CAPPED 2
 #define UNDERCURL_STYLE UNDERCURL_SPIKY
+
+/*
+ * Underline URLs starting with these "scheme://" prefixes and copy them with
+ * an ordinary left click. A URL ends after at most 2048 characters, and any
+ * text following it is scanned for further URLs.
+ */
+const char *urlprefixes[] = { "http://", "https://", NULL };
+const char urlchars[] =
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	"0123456789-._~:/?#@!$&'()*+,;=%[]";

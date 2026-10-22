@@ -36,6 +36,7 @@ enum glyph_attribute {
 	ATTR_WRAP       = 1 << 8,
 	ATTR_WIDE       = 1 << 9,
 	ATTR_WDUMMY     = 1 << 10,
+	ATTR_URL        = 1 << 12,
 	ATTR_USTYLE     = 7 << 13,
 	ATTR_WPAD       = 1 << 16, /* padding before a wide glyph on the next row */
 	ATTR_BOLD_FAINT = ATTR_BOLD | ATTR_FAINT,
@@ -117,6 +118,8 @@ void selstart(int, int, int);
 void selextend(int, int, int, int);
 int selected(int, int);
 char *getsel(void);
+int turl(int, int);
+char *tgeturl(int, int);
 
 size_t utf8encode(Rune, char *);
 
@@ -141,3 +144,5 @@ extern unsigned int defaultfg;
 extern unsigned int defaultbg;
 extern unsigned int defaultcs;
 extern unsigned int scrollback_lines;
+extern const char *urlprefixes[];
+extern const char urlchars[];

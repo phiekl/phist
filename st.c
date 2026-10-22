@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <signal.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
@@ -35,10 +36,14 @@
 #define ESC_BUF_SIZ   (128*UTF_SIZ)
 #define ESC_ARG_SIZ   16
 #define CAR_PER_ARG   6
+#define URLTARGET_MAX 2048 /* characters of a URL underlined and copied */
 #define STR_BUF_SIZ   ESC_BUF_SIZ
 #define STR_ARG_SIZ   ESC_ARG_SIZ
 
 /* macros */
+#ifndef ROWVISIT
+#define ROWVISIT() /* tests count row lookups to bound work per update */
+#endif
 #define IS_SET(flag)		((term.mode & (flag)) != 0)
 #define ISCONTROLC0(c)		(BETWEEN(c, 0, 0x1f) || (c) == 0x7f)
 #define ISCONTROLC1(c)		(BETWEEN(c, 0x80, 0x9f))
@@ -224,6 +229,7 @@ static char *base64dec(const char *);
 static char base64dec_getc(const char **);
 
 static ssize_t xwrite(int, const char *, size_t);
+static void urlupdate(void);
 static Line viewline(int);
 
 /* Globals */
@@ -234,6 +240,24 @@ static STREscape strescseq;
 static int iofd = 1;
 static int cmdfd;
 static pid_t pid;
+
+/*
+ * URL overlays belong to the displayed view, not the terminal's stored
+ * glyphs. They are recomputed from the visible text and some context
+ * whenever anything that could affect it changes.
+ */
+static struct {
+	int *cells, *old; /* target index + 1 for each visible cell */
+	int cols, rows, count, capacity, dirty;
+	char **targets;
+} urls = { .dirty = 1 };
+
+static struct {
+	const char **seen, **prefixes; /* configured and accepted prefixes */
+	size_t *lengths;
+	int nseen, count, ready;
+	uchar allowed[256], trailing[256];
+} urlcfg;
 
 static const uchar utfbyte[UTF_SIZ + 1] = {0x80,    0, 0xC0, 0xE0, 0xF0};
 static const uchar utfmask[UTF_SIZ + 1] = {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
@@ -305,6 +329,7 @@ sb_init(int lines)
 {
 	int i;
 
+	urls.dirty = 1;
 	sb.buf  = xmalloc(sizeof(*sb.buf) * MAX(1, lines));
 	sb.cap  = lines;
 	sb.limit = lines;
@@ -330,6 +355,7 @@ sb_evict(Scrollback *history)
 	history->base++;
 	history->len--;
 	/* max_width remains a conservative bound if its widest row was evicted. */
+	urls.dirty = 1;
 }
 
 /* Push one screen line into scrollback.
@@ -375,6 +401,7 @@ sb_get(int idx)
 	Line row;
 	int x;
 
+	ROWVISIT();
 	/* idx is logical: 0..sb.len-1 */
 	if (idx < 0 || idx >= sb.len)
 		return NULL;
@@ -432,6 +459,7 @@ sb_clear(void)
 	int i;
 	int p;
 
+	urls.dirty = 1;
 	if (!sb.buf)
 		return;
 
@@ -485,6 +513,7 @@ sb_resize(int col, int rows, ReflowCursor *marks, int nmarks)
 
 	for (i = 0; i < sb.len; i++) {
 		/* Unwrap: Accumulate physical lines into one logical line. */
+		ROWVISIT();
 		source = &sb.buf[sb_phys_index(i)];
 		line = source->cells;
 		/* Only the stored cells are needed; wrapped lines are full width. */
@@ -630,6 +659,8 @@ sb_pop_screen(int start, int loaded, int new_cols)
 	int i, p, x, n;
 
 	loaded = MIN(loaded, sb.len - start);
+	if (loaded > 0)
+		urls.dirty = 1;
 	new_cols = MIN(new_cols, term.col);
 	for (i = 0; i < sb.len - start; i++) {
 		p = sb_phys_index(start + i);
@@ -664,6 +695,7 @@ sb_startdelta(uint64_t oldstart, uint64_t newstart)
 static void
 sb_view_changed(void)
 {
+	urls.dirty = 1;
 	if (!term.dirty || term.row <= 0)
 		return;
 	tfulldirt();
@@ -722,6 +754,7 @@ viewline(int row)
 	static int boundarycols;
 	int logical;
 
+	ROWVISIT();
 	logical = sb_maxoffset() - sb.view_offset + row;
 	if (logical < 0 || logical >= sb_maxoffset() + term.row)
 		return NULL;
@@ -751,6 +784,219 @@ renderline(int y)
 	Line line = viewline(y);
 
 	return line ? line : emptyline();
+}
+
+/* Accept "scheme://", where a scheme is a letter then [A-Za-z0-9+.-]. */
+static int
+urlscheme(const char *prefix)
+{
+	const char *s = prefix;
+
+	if (!isalpha((uchar)*s))
+		return 0;
+	while (isalnum((uchar)*s) || *s == '+' || *s == '-' || *s == '.')
+		s++;
+	if (strcmp(s, "://"))
+		return 0;
+	for (s = prefix; *s; s++)
+		if (!urlcfg.allowed[(uchar)*s])
+			return 0;
+	return 1;
+}
+
+/* Rebuild the prefix list only when the configured one changes. */
+static void
+urlconfig(void)
+{
+	const char *s;
+	int p, count;
+
+	for (count = 0; urlprefixes[count]; count++)
+		;
+	for (p = 0; p < count && p < urlcfg.nseen && urlcfg.seen[p] == urlprefixes[p]; p++)
+		;
+	if (urlcfg.ready && p == count && count == urlcfg.nseen)
+		return;
+	if (!urlcfg.ready) {
+		for (s = urlchars; *s; s++)
+			urlcfg.allowed[(uchar)*s] = 1;
+		for (s = ".,;:!?'"; *s; s++)
+			urlcfg.trailing[(uchar)*s] = 1;
+	}
+	urlcfg.seen = xrealloc(urlcfg.seen, (count + 1) * sizeof(*urlcfg.seen));
+	urlcfg.prefixes = xrealloc(urlcfg.prefixes, (count + 1) * sizeof(*urlcfg.prefixes));
+	urlcfg.lengths = xrealloc(urlcfg.lengths, (count + 1) * sizeof(*urlcfg.lengths));
+	urlcfg.count = 0;
+	for (p = 0; p < count; p++) {
+		urlcfg.seen[p] = urlprefixes[p];
+		if (!urlscheme(urlprefixes[p])) {
+			fprintf(stderr, "phist: ignoring URL prefix \"%s\"\n", urlprefixes[p]);
+			continue;
+		}
+		urlcfg.prefixes[urlcfg.count] = urlprefixes[p];
+		urlcfg.lengths[urlcfg.count++] = strlen(urlprefixes[p]);
+	}
+	urlcfg.nseen = count;
+	urlcfg.ready = 1;
+}
+
+/*
+ * Find the next URL at or after *cursor. Bodies may balance parentheses and
+ * brackets, lose trailing punctuation, and end at most URLTARGET_MAX bytes
+ * after their start, so a URL never depends on text further away.
+ */
+static int
+urlmatch(const char *text, size_t length, size_t *cursor, size_t *begin, size_t *finish)
+{
+	size_t start, end, limit, trimmed, n;
+	int p, parens, brackets;
+	uchar c;
+
+	urlconfig();
+	while (*cursor < length) {
+		start = (*cursor)++;
+		for (p = 0; p < urlcfg.count; p++) {
+			n = urlcfg.lengths[p];
+			if (n <= length - start &&
+			    tolower((uchar)text[start]) == tolower((uchar)*urlcfg.prefixes[p]) &&
+			    !strncasecmp(text + start, urlcfg.prefixes[p], n))
+				break;
+		}
+		if (p == urlcfg.count)
+			continue;
+		limit = MIN(length, start + URLTARGET_MAX);
+		parens = brackets = 0;
+		for (end = trimmed = start + n; end < limit; end++) {
+			c = text[end];
+			if (!urlcfg.allowed[c])
+				break;
+			parens += (c == '(') - (c == ')');
+			brackets += (c == '[') - (c == ']');
+			if (parens < 0 || brackets < 0)
+				break;
+			if (!urlcfg.trailing[c])
+				trimmed = end + 1;
+		}
+		*cursor = trimmed;
+		if (trimmed > start + n) {
+			*begin = start;
+			*finish = trimmed;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static int
+urlwraps(int y)
+{
+	Line line = viewline(y);
+
+	return line && line[term.col - 1].mode & ATTR_WRAP;
+}
+
+/*
+ * Scan the view plus URLTARGET_MAX bytes of wrapped context on each side,
+ * rounded to whole rows, to include targets crossing the view's edges.
+ * Chains of nested URLs hitting the length cap may be segmented differently
+ * as the view moves.
+ */
+static void
+urlupdate(void)
+{
+	char *text;
+	size_t *offsets, length = 0, start, end, lo, hi, x;
+	int top = 0, bottom = term.row - 1, y, row, id, *swap, i;
+	int context = (URLTARGET_MAX + term.col - 1) / term.col;
+	Line line;
+
+	if (!urls.dirty || term.col < 1 || term.row < 1)
+		return;
+	urls.dirty = 0;
+	for (i = 0; i < urls.count; i++)
+		free(urls.targets[i]);
+	urls.count = 0;
+	if (urls.cols != term.col || urls.rows != term.row) {
+		free(urls.cells);
+		free(urls.old);
+		urls.cells = xmalloc((size_t)term.row * term.col * sizeof(*urls.cells));
+		urls.old = xmalloc((size_t)term.row * term.col * sizeof(*urls.old));
+		memset(urls.cells, 0, (size_t)term.row * term.col * sizeof(*urls.cells));
+		urls.cols = term.col;
+		urls.rows = term.row;
+		tfulldirt();
+	}
+	swap = urls.old;
+	urls.old = urls.cells;
+	urls.cells = swap;
+	memset(urls.cells, 0, (size_t)term.row * term.col * sizeof(*urls.cells));
+
+	while (top > -context && urlwraps(top - 1))
+		top--;
+	while (bottom < term.row - 1 + context && urlwraps(bottom) && viewline(bottom + 1))
+		bottom++;
+	text = xmalloc((size_t)(bottom - top + 1) * (term.col + 1));
+	offsets = xmalloc((size_t)(bottom - top + 2) * sizeof(*offsets));
+	for (y = top; y <= bottom; y++) {
+		line = renderline(y);
+		offsets[y - top] = length;
+		for (x = 0; x < term.col; x++)
+			text[length++] = !(line[x].mode & ATTR_WDUMMY) &&
+				BETWEEN(line[x].u, 1, 127) ? line[x].u : ' ';
+		if (!(line[term.col - 1].mode & ATTR_WRAP))
+			text[length++] = '\n';
+	}
+	offsets[bottom - top + 1] = length;
+
+	for (x = 0, row = 0; urlmatch(text, length, &x, &start, &end);) {
+		while (row < term.row && offsets[row - top + 1] <= start)
+			row++;
+		id = 0;
+		for (y = row; y < term.row && offsets[y - top] < end; y++) {
+			lo = MAX(start, offsets[y - top]);
+			hi = MIN(end, offsets[y - top] + term.col);
+			if (lo >= hi)
+				continue;
+			if (!id) {
+				if (urls.count == urls.capacity) {
+					urls.capacity = urls.capacity ? 2 * urls.capacity : 16;
+					urls.targets = xrealloc(urls.targets,
+					                        urls.capacity * sizeof(*urls.targets));
+				}
+				urls.targets[urls.count] = xmalloc(end - start + 1);
+				memcpy(urls.targets[urls.count], text + start, end - start);
+				urls.targets[urls.count][end - start] = '\0';
+				id = ++urls.count;
+			}
+			for (; lo < hi; lo++)
+				urls.cells[(size_t)y * term.col + lo - offsets[y - top]] = id;
+		}
+	}
+	free(text);
+	free(offsets);
+
+	for (y = 0; y < term.row; y++)
+		if (memcmp(urls.cells + (size_t)y * term.col, urls.old + (size_t)y * term.col,
+		           term.col * sizeof(*urls.cells)))
+			tsetdirt(y, y);
+
+}
+
+int
+turl(int col, int row)
+{
+	urlupdate();
+	if (!BETWEEN(col, 0, urls.cols - 1) || !BETWEEN(row, 0, urls.rows - 1))
+		return 0;
+	return urls.cells[(size_t)row * urls.cols + col];
+}
+
+char *
+tgeturl(int col, int row)
+{
+	int id = turl(col, row);
+
+	return id ? xstrdup(urls.targets[id - 1]) : NULL;
 }
 
 ssize_t
@@ -1640,6 +1886,7 @@ tswapscreen(void)
 	if (sb.view_offset > 0)
 		sb.view_offset = IS_SET(MODE_ALTSCREEN) ?
 			MAX(0, sb.view_offset - term.row) : sb.view_offset + term.row;
+	urls.dirty = 1;
 	term.line = term.alt;
 	term.alt = tmp;
 	term.mode ^= MODE_ALTSCREEN;
@@ -1668,6 +1915,7 @@ tscrolldown(int orig, int n)
 	LIMIT(n, 0, term.bot-orig+1);
 	if (!n)
 		return;
+	urls.dirty = 1;
 	tdirtyscreen(orig, term.bot);
 
 	for (i = term.bot; i >= orig+n; i--) {
@@ -1715,6 +1963,7 @@ tscrollup(int orig, int n, int save)
 	}
 
 	newstart = sb_view_start();
+	urls.dirty = 1;
 	if (newstart != oldstart && sb.view_offset > 0)
 		tfulldirt();
 
@@ -1902,6 +2151,7 @@ tsetchar(Rune u, const Glyph *attr, int x, int y)
 	tdirtyscreen(y, y);
 	term.line[y][x] = *attr;
 	term.line[y][x].u = u;
+	urls.dirty = 1;
 }
 
 void
@@ -1920,6 +2170,7 @@ tclearregion(int x1, int y1, int x2, int y2)
 	LIMIT(y1, 0, term.row-1);
 	LIMIT(y2, 0, term.row-1);
 
+	urls.dirty = 1;
 	for (y = y1; y <= y2; y++) {
 		tdirtyscreen(y, y);
 		for (x = x1; x <= x2; x++) {
@@ -2891,6 +3142,7 @@ kscroll(const Arg *arg)
 	oldstart = sb_view_start();
 	sb.view_offset += arg->i;
 	LIMIT(sb.view_offset, 0, sb_maxoffset());
+	urls.dirty = 1;
 	newstart = sb_view_start();
 
 	selscrollback(sb_startdelta(oldstart, newstart));
@@ -3351,6 +3603,7 @@ tresize(int col, int row)
 	int nmarks = 2, screen_start = 0, cursor_row, altshift = 0;
 	Line *tmp, *oldalt = NULL;
 
+	urls.dirty = 1;
 	if (col < 1 || row < 1) {
 		fprintf(stderr,
 			"tresize: error resizing to %dx%d\n", col, row);
@@ -3556,6 +3809,7 @@ draw(void)
 
 	if (!xstartdraw())
 		return;
+	urlupdate();
 
 	/* adjust cursor position */
 	LIMIT(term.ocx, 0, term.col-1);

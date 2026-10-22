@@ -154,6 +154,9 @@ main(void)
 	base.ucolor = 2;
 	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
 	assert(stroke == colors[2].pixel && allocations == 1);
+	base.mode = ATTR_URL;
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(stroke == colors[1].pixel && allocations == 1);
 	for (i = 0; i < 100; i++)
 		assert(xunderlinepixel(TRUECOLOR(i, 2, 3), 0) == ((i << 16) | 0x0203));
 	assert(allocations - frees == LEN(underlinecolors.entries));
