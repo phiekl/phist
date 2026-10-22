@@ -7,6 +7,12 @@
 static int allocations, frees, failalloc, fills;
 static int contexts, freedcontexts;
 static unsigned long stroke;
+static unsigned long painted[2100];
+static int recordglyphs;
+
+Line testrender_text(int, const char *);
+
+FT_UInt XftCharIndex(Display *d, XftFont *f, FcChar32 c) { return 1; }
 
 Bool
 XftColorAllocValue(Display *d, Visual *v, Colormap m, const XRenderColor *value, XftColor *color)
@@ -22,7 +28,19 @@ void XftColorFree(Display *d, Visual *v, Colormap m, XftColor *color) { frees++;
 void XftDrawRect(XftDraw *d, const XftColor *c, int x, int y, unsigned int w, unsigned int h) {}
 Bool XftDrawSetClipRectangles(XftDraw *d, int x, int y, const XRectangle *r, int n) { return 1; }
 Bool XftDrawSetClip(XftDraw *d, Region r) { return 1; }
-void XftDrawGlyphFontSpec(XftDraw *d, const XftColor *c, const XftGlyphFontSpec *s, int n) {}
+void
+XftDrawGlyphFontSpec(XftDraw *d, const XftColor *c, const XftGlyphFontSpec *s, int n)
+{
+	int i, col;
+
+	if (!recordglyphs)
+		return;
+	for (i = 0; i < n; i++) {
+		col = (s[i].x - borderpx) / win.cw;
+		assert(BETWEEN(col, 0, LEN(painted) - 1));
+		painted[col] = c->pixel;
+	}
+}
 Drawable XftDrawDrawable(XftDraw *d) { return 1; }
 GC XCreateGC(Display *d, Drawable dr, unsigned long mask, XGCValues *v) { contexts++; return (GC)1; }
 int XChangeGC(Display *d, GC gc, unsigned long mask, XGCValues *v) { stroke = v->foreground; return 0; }
@@ -165,6 +183,34 @@ main(void)
 	xclearunderlinecolors();
 	assert(allocations == frees);
 	assert(contexts == 1 && !freedcontexts);
+	/* Adjacent capped URL occurrences must flash independently. */
+	{
+		const char *second = "https://second.example/";
+		char text[2100];
+		Line line;
+
+		memset(text, 'a', 2048);
+		memcpy(text, "https://", 8);
+		strcpy(text + 2048, second);
+		line = testrender_text(LEN(painted), text);
+		borderpx = 0;
+		win.w = win.tw = LEN(painted) * win.cw;
+		win.h = win.th = win.ch;
+		xw.specbuf = xmalloc(LEN(painted) * sizeof(*xw.specbuf));
+		colors[defaultfg].pixel = 0x123456;
+		colors[defaultbg].pixel = 0x654321;
+		recordglyphs = 1;
+		tflashurl(2048, 0, second);
+		xdrawline(line, 0, 0, LEN(painted));
+		assert(painted[0] == colors[defaultfg].pixel);
+		assert(painted[2048] == colors[defaultbg].pixel);
+		text[2048] = '\0';
+		tflashurl(0, 0, text);
+		xdrawline(line, 0, 0, LEN(painted));
+		assert(painted[0] == colors[defaultbg].pixel);
+		assert(painted[2048] == colors[defaultfg].pixel);
+		free(xw.specbuf);
+	}
 	puts("PASS: underline styles, RGB cache reuse/eviction, fallback, balanced frees and a reused GC");
 	testundercurl();
 	return 0;

@@ -120,6 +120,9 @@ int selected(int, int);
 char *getsel(void);
 int turl(int, int);
 char *tgeturl(int, int);
+void tflashurl(int, int, const char *);
+int turlflashed(int, int);
+void tclearurlflash(void);
 
 size_t utf8encode(Rune, char *);
 

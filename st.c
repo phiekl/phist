@@ -250,6 +250,8 @@ static struct {
 	int *cells, *old; /* target index + 1 for each visible cell */
 	int cols, rows, count, capacity, dirty;
 	char **targets;
+	int flash, flashcol, flashrow;
+	char *flashtext;
 } urls = { .dirty = 1 };
 
 static struct {
@@ -979,7 +981,13 @@ urlupdate(void)
 		if (memcmp(urls.cells + (size_t)y * term.col, urls.old + (size_t)y * term.col,
 		           term.col * sizeof(*urls.cells)))
 			tsetdirt(y, y);
-
+	if (urls.flashtext) {
+		id = turl(urls.flashcol, urls.flashrow);
+		if (id && !strcmp(urls.targets[id - 1], urls.flashtext))
+			urls.flash = id;
+		else
+			tclearurlflash();
+	}
 }
 
 int
@@ -997,6 +1005,38 @@ tgeturl(int col, int row)
 	int id = turl(col, row);
 
 	return id ? xstrdup(urls.targets[id - 1]) : NULL;
+}
+
+void
+tflashurl(int col, int row, const char *text)
+{
+	int id = turl(col, row);
+
+	if (id && (!text || strcmp(urls.targets[id - 1], text)))
+		id = 0;
+	free(urls.flashtext);
+	urls.flashtext = id ? xstrdup(urls.targets[id - 1]) : NULL;
+	urls.flash = id;
+	urls.flashcol = col;
+	urls.flashrow = row;
+	tfulldirt();
+}
+
+int
+turlflashed(int col, int row)
+{
+	int id = turl(col, row);
+
+	return id && id == urls.flash;
+}
+
+void
+tclearurlflash(void)
+{
+	free(urls.flashtext);
+	urls.flashtext = NULL;
+	urls.flash = 0;
+	tfulldirt();
 }
 
 ssize_t

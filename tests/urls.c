@@ -767,7 +767,40 @@ main(void)
 	expect(-1, 0, NULL);
 	expect(0, term.row, NULL);
 
-	puts("PASS: URLs, wrapping, viewport edges and existing underlines");
+	/* Copy feedback covers the complete wrapped occurrence, not its neighbors. */
+	reset(12, 8);
+	put(url);
+	put(" ");
+	tflashurl(3, 1, url);
+	for (i = 0; url[i]; i++)
+		assert(turlflashed(i % term.col, i / term.col));
+	assert(!turlflashed(i % term.col, i / term.col));
+	tclearurlflash();
+	assert(!turlflashed(3, 1) && turl(3, 1));
+
+	reset(80, 4);
+	put(first);
+	put(" ");
+	put(first);
+	tflashurl(strlen(first) + 1, 0, first);
+	assert(!turlflashed(0, 0));
+	assert(turlflashed(strlen(first) + 1, 0));
+	tclearurlflash();
+
+	/* Rebuilding the URL list must preserve the target despite reordered IDs. */
+	reset(80, 4);
+	put("\033[2;1H");
+	put(first);
+	tflashurl(0, 1, first);
+	put("\033[1;1H");
+	put(second);
+	assert(turlflashed(0, 1) && !turlflashed(0, 0));
+	put("\033[2;1Hhttp://changed.example/ ");
+	assert(!turlflashed(0, 1));
+	tflashurl(0, 0, "https://not-the-copied-url.example/");
+	assert(!turlflashed(0, 0));
+	puts("PASS: URLs, soft/hard wrapping, punctuation, Unicode, viewport edges, edits, alternate screen, reflow, existing underlines");
+	puts("PASS: wrapped copy feedback, duplicate URLs, reordered URL IDs, changed targets, restoration");
 	reset(13, 6);
 	for (i = 0; i < 4000; i++) {
 		random = random * 1664525U + 1013904223U;

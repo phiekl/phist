@@ -361,6 +361,36 @@ static struct {
 	int active, col, row;
 	char *text;
 } urlclick;
+static int urlflashset;
+static struct timespec lasturlflash;
+
+static void
+urlflashbegin(int col, int row)
+{
+	if (!urlflashtimeout)
+		return;
+	tflashurl(col, row, xsel.primary);
+	clock_gettime(CLOCK_MONOTONIC, &lasturlflash);
+	urlflashset = 1;
+	redraw();
+	XFlush(xw.dpy);
+}
+
+static double
+urlflashremaining(struct timespec now)
+{
+	double remain;
+
+	if (!urlflashset)
+		return -1;
+	remain = urlflashtimeout - TIMEDIFF(now, lasturlflash);
+	if (remain <= 0) {
+		urlflashset = 0;
+		tclearurlflash();
+		return -1;
+	}
+	return remain;
+}
 
 void
 clipcopy(const Arg *dummy)
@@ -840,6 +870,7 @@ brelease(XEvent *e)
 			setsel(urlclick.text, e->xbutton.time);
 			urlclick.text = NULL;
 			clipcopy(NULL);
+			urlflashbegin(urlclick.col, urlclick.row);
 		} else {
 			if (urlclick.text)
 				mousesel(e, 0);
@@ -1629,6 +1660,9 @@ xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, i
 	XRectangle r;
 	int ustyle = USTYLE(base);
 
+	if ((base.mode & ATTR_URL) && turlflashed(x, y))
+		base.mode ^= ATTR_REVERSE;
+
 	/* Fallback on color display for attributes not supported by the font */
 	if (base.mode & ATTR_ITALIC && base.mode & ATTR_BOLD) {
 		if (dc.ibfont.badslant || dc.ibfont.badweight)
@@ -2254,6 +2288,7 @@ void
 xdrawline(Line line, int x1, int y1, int x2)
 {
 	int i, x, ox, numspecs;
+	int url = 0, newurl;
 	Glyph base, new;
 	XftGlyphFontSpec *specs = xw.specbuf;
 
@@ -2263,11 +2298,12 @@ xdrawline(Line line, int x1, int y1, int x2)
 		new = line[x];
 		if (new.mode & ATTR_WDUMMY)
 			continue;
-		if (turl(x, y1))
+		newurl = turl(x, y1);
+		if (newurl)
 			new.mode |= ATTR_URL;
 		if (selected(x, y1))
 			new.mode ^= ATTR_REVERSE;
-		if (i > 0 && ATTRCMP(base, new)) {
+		if (i > 0 && (ATTRCMP(base, new) || url != newurl)) {
 			xdrawglyphfontspecs(specs, base, i, ox, y1);
 			specs += i;
 			numspecs -= i;
@@ -2276,6 +2312,7 @@ xdrawline(Line line, int x1, int y1, int x2)
 		if (i == 0) {
 			ox = x;
 			base = new;
+			url = newurl;
 		}
 		i++;
 	}
@@ -2555,7 +2592,7 @@ run(void)
 	fd_set rfd;
 	int xfd = XConnectionNumber(xw.dpy), ttyfd, xev, drawing;
 	struct timespec seltv, *tv, now, trigger;
-	double timeout;
+	double timeout, urlremain;
 
 	/* Waiting for window mapping */
 	do {
@@ -2634,6 +2671,10 @@ run(void)
 		/* idle detected or maxlatency exhausted -> draw */
 		applyresize();
 		timeout = blinkremaining(now);
+
+		urlremain = urlflashremaining(now);
+		if (urlremain > 0 && (timeout < 0 || urlremain < timeout))
+			timeout = urlremain;
 
 		draw();
 		XFlush(xw.dpy);

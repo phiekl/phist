@@ -488,3 +488,6 @@ const char *urlprefixes[] = { "http://", "https://", NULL };
 const char urlchars[] =
 	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 	"0123456789-._~:/?#@!$&'()*+,;=%[]";
+
+/* Reverse the copied URL for this many ms (0 disables copy feedback). */
+static unsigned int urlflashtimeout = 150;

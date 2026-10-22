@@ -49,3 +49,20 @@ random parser input and long-line scrolling, with 32 seeds over 18 history
 limits and seven sizes. A 4 MB wrapped-line case checks allocation and
 row-lookup bounds through the test-only `ROWVISIT()` hook in `viewline()`
 and `sb_get()`. Rendering checks cover foreground-colored URL underlines.
+
+## Copy feedback
+
+A copied URL briefly reverses colors, including all its wrapped portions.
+`urlflashtimeout` sets the duration in milliseconds: 150 by default, or zero
+to disable it. Only the clicked occurrence flashes, even if the same target
+appears elsewhere. Original attributes return when the flash ends, including
+while phist is idle.
+
+The flash remembers the target text and position, rather than a changing
+overlay index, and is cancelled if the target there changes. Drawing runs
+split at occurrence boundaries, so adjacent capped targets with identical
+attributes still flash independently.
+
+The URL and rendering suites above check duplicate targets, wrapped
+feedback, reordered overlay IDs, changed text and attribute restoration
+through the real parser and glyph-run renderer.
