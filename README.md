@@ -19,6 +19,8 @@ phist is an X11 terminal emulator forked from [st](https://st.suckless.org/).
   logical lines.
 - [Local mouse actions](doc/selection.md#local-mouse-actions) without
   application mouse reporting.
+- [Initial working directory](doc/building.md#initial-working-directory) with
+  `-d`.
 
 ## Build
 

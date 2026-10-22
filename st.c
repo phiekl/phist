@@ -1803,7 +1803,7 @@ stty(char **args)
 }
 
 int
-ttynew(const char *line, char *cmd, const char *out, char **args)
+ttynew(const char *line, char *cmd, const char *out, char **args, const char *dir)
 {
 	int m, s;
 
@@ -1821,6 +1821,8 @@ ttynew(const char *line, char *cmd, const char *out, char **args)
 		if ((cmdfd = open(line, O_RDWR)) < 0)
 			die("open line '%s' failed: %s\n",
 			    line, strerror(errno));
+		if (dir && chdir(dir) < 0)
+			die("chdir '%s': %s\n", dir, strerror(errno));
 		dup2(cmdfd, 0);
 		stty(args);
 		return cmdfd;
@@ -1845,6 +1847,9 @@ ttynew(const char *line, char *cmd, const char *out, char **args)
 			die("ioctl TIOCSCTTY failed: %s\n", strerror(errno));
 		if (s > 2)
 			close(s);
+		/* Resolve phist's output and device paths in the caller's directory. */
+		if (dir && chdir(dir) < 0)
+			die("chdir '%s': %s\n", dir, strerror(errno));
 #ifdef __OpenBSD__
 		if (pledge("stdio getpw proc exec", NULL) == -1)
 			die("pledge\n");

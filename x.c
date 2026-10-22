@@ -298,6 +298,7 @@ static double defaultfontsize = 0;
 
 static char *opt_class = NULL;
 static char **opt_cmd  = NULL;
+static char *opt_dir   = NULL;
 static char *opt_embed = NULL;
 static char *opt_font  = NULL;
 static char *opt_io    = NULL;
@@ -2522,7 +2523,7 @@ run(void)
 		}
 	} while (ev.type != MapNotify);
 
-	ttyfd = ttynew(opt_line, shell, opt_io, opt_cmd);
+	ttyfd = ttynew(opt_line, shell, opt_io, opt_cmd, opt_dir);
 	cresize(w, h);
 
 	clock_gettime(CLOCK_MONOTONIC, &lastblink);
@@ -2597,12 +2598,12 @@ run(void)
 void
 usage(void)
 {
-	die("usage: %s [-aiv] [-c class] [-f font] [-g geometry]"
-	    " [-n name] [-o file]\n"
+	die("usage: %s [-aiv] [-c class] [-d path] [-f font]"
+	    " [-g geometry] [-n name] [-o file]\n"
 	    "          [-T title] [-t title] [-w windowid]"
 	    " [[-e] command [args ...]]\n"
-	    "       %s [-aiv] [-c class] [-f font] [-g geometry]"
-	    " [-n name] [-o file]\n"
+	    "       %s [-aiv] [-c class] [-d path] [-f font]"
+	    " [-g geometry] [-n name] [-o file]\n"
 	    "          [-T title] [-t title] [-w windowid] -l line"
 	    " [stty_args ...]\n", argv0, argv0);
 }
@@ -2620,6 +2621,9 @@ main(int argc, char *argv[])
 		break;
 	case 'c':
 		opt_class = EARGF(usage());
+		break;
+	case 'd':
+		opt_dir = EARGF(usage());
 		break;
 	case 'e':
 		if (argc > 0)

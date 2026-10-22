@@ -44,3 +44,21 @@ Install these entries on remote hosts where programs run under this
 terminal type. An existing generated `config.h` keeps its own `termname`;
 set it to `"phist-256color"` or regenerate it from `config.def.h` to adopt the
 new default.
+
+## Initial working directory
+
+Use `phist -d path` to choose the directory inherited by the shell or command:
+
+```sh
+phist -d /tmp
+phist -d ../project -e make
+```
+
+Relative paths are resolved from the directory where phist was launched.
+Without `-d`, the inherited working directory is kept. Failure to enter the
+requested directory exits with the path and system error.
+
+Relative `-o` output-log and `-l` terminal-device paths still refer to the
+launching directory: phist opens those before changing directory. In shell
+mode, the child changes directory before execution; in line mode, phist changes
+directory after opening the files and before invoking `stty`.

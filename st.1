@@ -6,6 +6,8 @@ phist \- phi's simple terminal (st fork)
 .RB [ \-aiv ]
 .RB [ \-c
 .IR class ]
+.RB [ \-d
+.IR path ]
 .RB [ \-f
 .IR font ]
 .RB [ \-g
@@ -30,6 +32,8 @@ phist \- phi's simple terminal (st fork)
 .RB [ \-aiv ]
 .RB [ \-c
 .IR class ]
+.RB [ \-d
+.IR path ]
 .RB [ \-f
 .IR font ]
 .RB [ \-g
@@ -57,6 +61,11 @@ disable alternate screens in terminal
 .TP
 .BI \-c " class"
 defines the window class (default phist).
+.TP
+.BI \-d " path"
+sets the initial working directory to
+.IR path .
+Exits with an error if the directory cannot be entered.
 .TP
 .BI \-f " font"
 defines the
