@@ -176,9 +176,8 @@ static unsigned int mousebg = 0;
 static unsigned int defaultattr = 11;
 
 /*
- * Force mouse select/shortcuts while mask is active (when MODE_MOUSE is set).
- * Note that if you want to use ShiftMask with selmasks, set this to an other
- * modifier, set to 0 to not use it.
+ * Modifier ignored when matching mouse shortcuts and selection types.
+ * Choose another modifier if ShiftMask is used in selmasks, or 0 to disable.
  */
 static uint forcemousemod = ShiftMask;
 

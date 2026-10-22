@@ -2739,31 +2739,8 @@ tsetmode(int priv, int set, const int *args, int narg)
 			case 25: /* DECTCEM -- Text Cursor Enable Mode */
 				xsetmode(!set, MODE_HIDE);
 				break;
-			case 9:    /* X10 mouse compatibility mode */
-				xsetpointermotion(0);
-				xsetmode(0, MODE_MOUSE);
-				xsetmode(set, MODE_MOUSEX10);
-				break;
-			case 1000: /* 1000: report button press */
-				xsetpointermotion(0);
-				xsetmode(0, MODE_MOUSE);
-				xsetmode(set, MODE_MOUSEBTN);
-				break;
-			case 1002: /* 1002: report motion on button press */
-				xsetpointermotion(0);
-				xsetmode(0, MODE_MOUSE);
-				xsetmode(set, MODE_MOUSEMOTION);
-				break;
-			case 1003: /* 1003: enable all mouse motions */
-				xsetpointermotion(set);
-				xsetmode(0, MODE_MOUSE);
-				xsetmode(set, MODE_MOUSEMANY);
-				break;
 			case 1004: /* 1004: send focus events to tty */
 				xsetmode(set, MODE_FOCUS);
-				break;
-			case 1006: /* 1006: extended reporting mode */
-				xsetmode(set, MODE_MOUSESGR);
 				break;
 			case 1034: /* 1034: enable 8-bit mode for keyboard input */
 				xsetmode(set, MODE_8BIT);
@@ -2793,15 +2770,17 @@ tsetmode(int priv, int set, const int *args, int narg)
 			case 2004: /* 2004: bracketed paste mode */
 				xsetmode(set, MODE_BRCKTPASTE);
 				break;
-			/* Not implemented mouse modes. See comments there. */
-			case 1001: /* mouse highlight mode; can hang the
-				      terminal by design when implemented. */
-			case 1005: /* UTF-8 mouse mode; will confuse
-				      applications not supporting UTF-8
-				      and luit. */
-			case 1015: /* urxvt mangled mouse mode; incompatible
-				      and can be mistaken for other control
-				      codes. */
+			/* Mouse input belongs to phist; applications cannot enable reporting. */
+			case 9:    /* X10 mouse */
+			case 1000: /* button reporting */
+			case 1001: /* highlight tracking */
+			case 1002: /* button-motion reporting */
+			case 1003: /* all-motion reporting */
+			case 1005: /* UTF-8 coordinates */
+			case 1006: /* SGR coordinates */
+			case 1007: /* alternate-screen wheel-to-key translation */
+			case 1015: /* urxvt coordinates */
+			case 1016: /* SGR pixel coordinates */
 				break;
 			default:
 				fprintf(stderr,

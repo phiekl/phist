@@ -192,7 +192,6 @@ static void selclear_(XEvent *);
 static void selrequest(XEvent *);
 static void setsel(char *, Time);
 static void mousesel(XEvent *, int);
-static void mousereport(XEvent *);
 static char *kmap(KeySym, uint);
 static int match(uint, uint);
 
@@ -306,7 +305,6 @@ static char *opt_line  = NULL;
 static char *opt_name  = NULL;
 static char *opt_title = NULL;
 
-static uint buttons; /* bit field of pressed buttons */
 static int pendingw, pendingh; /* latest unapplied ConfigureNotify size */
 static int cursorblinks = 0;
 static struct timespec lastblink;
@@ -503,78 +501,6 @@ mousesel(XEvent *e, int done)
 		setsel(getsel(), e->xbutton.time);
 }
 
-void
-mousereport(XEvent *e)
-{
-	int len, btn, code;
-	int x = evcol(e), y = evrow(e);
-	int state = e->xbutton.state;
-	char buf[40];
-	static int ox, oy;
-
-	if (e->type == MotionNotify) {
-		if (x == ox && y == oy)
-			return;
-		if (!IS_SET(MODE_MOUSEMOTION) && !IS_SET(MODE_MOUSEMANY))
-			return;
-		/* MODE_MOUSEMOTION: no reporting if no button is pressed */
-		if (IS_SET(MODE_MOUSEMOTION) && buttons == 0)
-			return;
-		/* Set btn to lowest-numbered pressed button, or 12 if no
-		 * buttons are pressed. */
-		for (btn = 1; btn <= 11 && !(buttons & (1<<(btn-1))); btn++)
-			;
-		code = 32;
-	} else {
-		btn = e->xbutton.button;
-		/* Only buttons 1 through 11 can be encoded */
-		if (btn < 1 || btn > 11)
-			return;
-		if (e->type == ButtonRelease) {
-			/* MODE_MOUSEX10: no button release reporting */
-			if (IS_SET(MODE_MOUSEX10))
-				return;
-			/* Don't send release events for the scroll wheel */
-			if (btn == 4 || btn == 5)
-				return;
-		}
-		code = 0;
-	}
-
-	ox = x;
-	oy = y;
-
-	/* Encode btn into code. If no button is pressed for a motion event in
-	 * MODE_MOUSEMANY, then encode it as a release. */
-	if ((!IS_SET(MODE_MOUSESGR) && e->type == ButtonRelease) || btn == 12)
-		code += 3;
-	else if (btn >= 8)
-		code += 128 + btn - 8;
-	else if (btn >= 4)
-		code += 64 + btn - 4;
-	else
-		code += btn - 1;
-
-	if (!IS_SET(MODE_MOUSEX10)) {
-		code += ((state & ShiftMask  ) ?  4 : 0)
-		      + ((state & Mod1Mask   ) ?  8 : 0) /* meta key: alt */
-		      + ((state & ControlMask) ? 16 : 0);
-	}
-
-	if (IS_SET(MODE_MOUSESGR)) {
-		len = snprintf(buf, sizeof(buf), "\033[<%d;%d;%d%c",
-				code, x+1, y+1,
-				e->type == ButtonRelease ? 'm' : 'M');
-	} else if (x < 223 && y < 223) {
-		len = snprintf(buf, sizeof(buf), "\033[M%c%c%c",
-				32+code, 32+x+1, 32+y+1);
-	} else {
-		return;
-	}
-
-	ttywrite(buf, len, 0);
-}
-
 uint
 buttonmask(uint button)
 {
@@ -639,10 +565,6 @@ bpress(XEvent *e)
 	/* The wheel scrolls history, also beneath alternate-screen programs. */
 	if (btn == Button4 || btn == Button5) {
 		Arg a;
-		if (IS_SET(MODE_MOUSE) && !(e->xbutton.state & forcemousemod)) {
-			mousereport(e);
-			return;
-		}
 		a.i = MAX(1, mousescrolllines);
 		if (btn == Button4) {
 			kscrollup(&a);
@@ -652,9 +574,6 @@ bpress(XEvent *e)
 		return;
 	}
 
-	if (1 <= btn && btn <= 11)
-		buttons |= 1 << (btn-1);
-
 	if (btn == Button1 && match(XK_NO_MOD, e->xbutton.state & ~LockMask) &&
 	    (urlclick.text = tgeturl(evcol(e), evrow(e)))) {
 		xsel.clicks = 0;
@@ -662,12 +581,6 @@ bpress(XEvent *e)
 		urlclick.col = evcol(e);
 		urlclick.row = evrow(e);
 		selstart(urlclick.col, urlclick.row, 0);
-		return;
-	}
-
-	if (IS_SET(MODE_MOUSE) && !(e->xbutton.state & forcemousemod)) {
-		xsel.clicks = 0;
-		mousereport(e);
 		return;
 	}
 
@@ -881,9 +794,6 @@ brelease(XEvent *e)
 {
 	int btn = e->xbutton.button;
 
-	if (1 <= btn && btn <= 11)
-		buttons &= ~(1 << (btn-1));
-
 	if (btn == Button1 && urlclick.active) {
 		if (urlclick.text && evcol(e) == urlclick.col && evrow(e) == urlclick.row) {
 			selclear();
@@ -902,11 +812,6 @@ brelease(XEvent *e)
 		return;
 	}
 
-	if (IS_SET(MODE_MOUSE) && !(e->xbutton.state & forcemousemod)) {
-		mousereport(e);
-		return;
-	}
-
 	if (mouseaction(e, 1))
 		return;
 	if (btn == Button1)
@@ -922,11 +827,6 @@ bmotion(XEvent *e)
 			urlclick.text = NULL;
 			mousesel(e, 0);
 		}
-		return;
-	}
-
-	if (IS_SET(MODE_MOUSE) && !(e->xbutton.state & forcemousemod)) {
-		mousereport(e);
 		return;
 	}
 
@@ -2385,13 +2285,6 @@ void
 unmap(XEvent *ev)
 {
 	win.mode &= ~MODE_VISIBLE;
-}
-
-void
-xsetpointermotion(int set)
-{
-	MODBIT(xw.attrs.event_mask, set, PointerMotionMask);
-	XChangeWindowAttributes(xw.dpy, xw.win, CWEventMask, &xw.attrs);
 }
 
 void

@@ -38,3 +38,22 @@ resizing ends them because text can reflow between rows.
 
 Run `LC_ALL=C.UTF-8 sh tests/selection.sh` for terminal and mouse checks,
 including these movement rules and multi-click expansion.
+
+## Local mouse actions
+
+Application mouse-tracking requests are ignored. The terminal keeps
+left-click URL copying, dragging and multi-click selection, middle-click
+PRIMARY paste, and wheel scrolling. Wheel steps use `mousescrolllines`
+(default five), including main-screen history beneath an alternate-screen
+program. Full-screen applications cannot receive mouse clicks or wheel
+reports from phist.
+
+The mouse-report encoder and its mode flags are removed, and `st.info` omits
+`kmous`. Run `make install` to install the updated terminfo entries;
+otherwise applications may still discover an older entry advertising mouse
+support. Focus reporting and bracketed paste are unaffected: automatic focus
+reports preserve a scrolled view, while paste returns to the live screen.
+
+Run `LC_ALL=C.UTF-8 sh tests/mouse.sh`. It verifies that tracking requests
+emit no mouse bytes, local selection/URL feedback/paste/scrolling still
+work, and all terminfo variants omit mouse capabilities.

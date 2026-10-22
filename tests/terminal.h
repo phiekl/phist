@@ -36,7 +36,6 @@ void xseticontitle(char *s) {}
 void xsettitle(char *s) {}
 int xsetcursor(int a) { return 0; }
 void xsetmode(int a, unsigned int b) {}
-void xsetpointermotion(int a) {}
 void xsetsel(char *s) {}
 void xximspot(int a, int b) {}
 
