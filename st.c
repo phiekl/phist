@@ -34,6 +34,7 @@
 #define UTF_SIZ       4
 #define ESC_BUF_SIZ   (128*UTF_SIZ)
 #define ESC_ARG_SIZ   16
+#define CAR_PER_ARG   6
 #define STR_BUF_SIZ   ESC_BUF_SIZ
 #define STR_ARG_SIZ   ESC_ARG_SIZ
 
@@ -142,6 +143,8 @@ typedef struct {
 	int arg[ESC_ARG_SIZ];
 	int narg;              /* nb of args */
 	char mode[2];
+	int carg[ESC_ARG_SIZ][CAR_PER_ARG]; /* colon args */
+	int cargc[ESC_ARG_SIZ]; /* includes omitted colon fields */
 } CSIEscape;
 
 /* STR Escape sequence structs */
@@ -162,6 +165,7 @@ static void ttywriteraw(const char *, size_t);
 
 static void csidump(void);
 static void csihandle(void);
+static int readcolonargs(char **, int, int[][CAR_PER_ARG]);
 static void csiparse(void);
 static void csireset(void);
 static void osc_color_response(int, int, int);
@@ -268,7 +272,8 @@ sb_phys_index(int logical_idx)
 static Glyph
 sb_padglyph(void)
 {
-	return (Glyph){ .u = ' ', .fg = defaultfg, .bg = defaultbg };
+	return (Glyph){ .u = ' ', .fg = defaultfg, .bg = defaultbg,
+		.ucolor = UCOLOR_DEFAULT };
 }
 
 /* Foreground and underline colors are invisible on unstyled blank cells. */
@@ -1588,7 +1593,8 @@ treset(void)
 	term.c = (TCursor){{
 		.mode = ATTR_NULL,
 		.fg = defaultfg,
-		.bg = defaultbg
+		.bg = defaultbg,
+		.ucolor = UCOLOR_DEFAULT
 	}, .x = 0, .y = 0, .state = CURSOR_DEFAULT};
 
 	memset(term.tabs, 0, term.col * sizeof(*term.tabs));
@@ -1782,12 +1788,33 @@ tnewline(int first_col)
 	tmoveto(first_col ? 0 : term.c.x, y);
 }
 
+int
+readcolonargs(char **p, int cursor, int params[][CAR_PER_ARG])
+{
+	char *np;
+	long value;
+	int i;
+
+	for (i = 0; i < CAR_PER_ARG; i++)
+		params[cursor][i] = -1;
+
+	i = 0;
+	while (**p == ':') {
+		(*p)++;
+		value = strtol(*p, &np, 10);
+		if (i < CAR_PER_ARG)
+			params[cursor][i] = np != *p && BETWEEN(value, 0, INT_MAX) ? value : -1;
+		i++;
+		*p = np;
+	}
+	return i;
+}
+
 void
 csiparse(void)
 {
 	char *p = csiescseq.buf, *np;
 	long int v;
-	int sep = ';'; /* colon or semi-colon, but not both */
 
 	csiescseq.narg = 0;
 	if (*p == '?') {
@@ -1805,9 +1832,9 @@ csiparse(void)
 			v = -1;
 		csiescseq.arg[csiescseq.narg++] = v;
 		p = np;
-		if (sep == ';' && *p == ':')
-			sep = ':'; /* allow override to colon once */
-		if (*p != sep || csiescseq.narg == ESC_ARG_SIZ)
+		csiescseq.cargc[csiescseq.narg - 1] =
+			readcolonargs(&p, csiescseq.narg - 1, csiescseq.carg);
+		if (*p != ';' || csiescseq.narg == ESC_ARG_SIZ)
 			break;
 		p++;
 	}
@@ -1960,13 +1987,41 @@ tdefcolor(const int *attr, int *npar, int l)
 {
 	int32_t idx = -1;
 	uint r, g, b;
+	int params[5], subparam = 0, count, start, j;
+	const int *sub;
+
+	/* Keep colon-separated colors separate from subsequent SGR attributes. */
+	if ((count = csiescseq.cargc[*npar]) > 0) {
+		sub = csiescseq.carg[*npar];
+		params[0] = attr[*npar];
+		params[1] = sub[0];
+		if (sub[0] == 2) {
+			if (count == 4)
+				start = 1;
+			else if (count == 5 && (sub[1] == -1 || sub[1] == 0))
+				start = 2;
+			else
+				return -1;
+			for (j = 0; j < 3; j++)
+				params[2 + j] = sub[start + j];
+		} else if (sub[0] == 5 && count == 2) {
+			params[2] = sub[1];
+		} else {
+			return -1;
+		}
+		attr = params;
+		npar = &subparam;
+		l = LEN(params);
+	}
+	if (*npar + 1 >= l)
+		return -1;
 
 	switch (attr[*npar + 1]) {
 	case 2: /* direct color in RGB space */
 		if (*npar + 4 >= l) {
 			fprintf(stderr,
-				"erresc(38): Incorrect number of parameters (%d)\n",
-				*npar);
+				"erresc(%d): Incorrect number of parameters (%d)\n",
+				attr[*npar], *npar);
 			break;
 		}
 		r = attr[*npar + 2];
@@ -1982,8 +2037,8 @@ tdefcolor(const int *attr, int *npar, int l)
 	case 5: /* indexed color */
 		if (*npar + 2 >= l) {
 			fprintf(stderr,
-				"erresc(38): Incorrect number of parameters (%d)\n",
-				*npar);
+				"erresc(%d): Incorrect number of parameters (%d)\n",
+				attr[*npar], *npar);
 			break;
 		}
 		*npar += 2;
@@ -1997,8 +2052,8 @@ tdefcolor(const int *attr, int *npar, int l)
 	case 3: /* direct color in CMY space */
 	case 4: /* direct color in CMYK space */
 	default:
-		fprintf(stderr,
-		        "erresc(38): gfx attr %d unknown\n", attr[*npar]);
+		fprintf(stderr, "erresc(%d): gfx attr %d unknown\n",
+		        attr[*npar], attr[*npar + 1]);
 		break;
 	}
 
@@ -2008,7 +2063,7 @@ tdefcolor(const int *attr, int *npar, int l)
 void
 tsetattr(const int *attr, int l)
 {
-	int i;
+	int i, style;
 	int32_t idx;
 
 	for (i = 0; i < l; i++) {
@@ -2019,12 +2074,14 @@ tsetattr(const int *attr, int l)
 				ATTR_FAINT      |
 				ATTR_ITALIC     |
 				ATTR_UNDERLINE  |
+				ATTR_USTYLE     |
 				ATTR_BLINK      |
 				ATTR_REVERSE    |
 				ATTR_INVISIBLE  |
 				ATTR_STRUCK     );
 			term.c.attr.fg = defaultfg;
 			term.c.attr.bg = defaultbg;
+			term.c.attr.ucolor = UCOLOR_DEFAULT;
 			break;
 		case 1:
 			term.c.attr.mode |= ATTR_BOLD;
@@ -2036,7 +2093,13 @@ tsetattr(const int *attr, int l)
 			term.c.attr.mode |= ATTR_ITALIC;
 			break;
 		case 4:
-			term.c.attr.mode |= ATTR_UNDERLINE;
+			style = csiescseq.cargc[i] ? csiescseq.carg[i][0] : 1;
+			if (!BETWEEN(style, 0, 5))
+				break;
+			term.c.attr.mode &= ~ATTR_USTYLE;
+			term.c.attr.mode |= style << 13;
+			MODBIT(term.c.attr.mode, style != 0, ATTR_UNDERLINE);
+
 			break;
 		case 5: /* slow blink */
 			/* FALLTHROUGH */
@@ -2059,7 +2122,7 @@ tsetattr(const int *attr, int l)
 			term.c.attr.mode &= ~ATTR_ITALIC;
 			break;
 		case 24:
-			term.c.attr.mode &= ~ATTR_UNDERLINE;
+			term.c.attr.mode &= ~(ATTR_UNDERLINE | ATTR_USTYLE);
 			break;
 		case 25:
 			term.c.attr.mode &= ~ATTR_BLINK;
@@ -2088,10 +2151,12 @@ tsetattr(const int *attr, int l)
 			term.c.attr.bg = defaultbg;
 			break;
 		case 58:
-			/* This starts a sequence to change the color of
-			 * "underline" pixels. We don't support that and
-			 * instead eat up a following "5;n" or "2;r;g;b". */
-			tdefcolor(attr, &i, l);
+			if ((idx = tdefcolor(attr, &i, l)) >= 0) {
+				term.c.attr.ucolor = idx;
+			}
+			break;
+		case 59:
+			term.c.attr.ucolor = UCOLOR_DEFAULT;
 			break;
 		default:
 			if (BETWEEN(attr[i], 30, 37)) {

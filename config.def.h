@@ -472,3 +472,9 @@ static char ascii_printable[] =
 
 /* Maximum number of retained history rows. */
 unsigned int scrollback_lines = 65536;
+
+/* Undercurl styles: rounded waves, spikes, or capped waves. */
+#define UNDERCURL_CURLY 0
+#define UNDERCURL_SPIKY 1
+#define UNDERCURL_CAPPED 2
+#define UNDERCURL_STYLE UNDERCURL_SPIKY

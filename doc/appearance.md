@@ -35,3 +35,60 @@ Run `LC_ALL=C.UTF-8 sh tests/blink.sh`. Checks cover continuous output,
 phase changes, input reset, disabled blinking, hidden/unfocused cursors,
 DECSCUSR 0, real Shift/Control events, alternate-screen history keys and
 full redraws after a resize that leaves the cell grid unchanged.
+
+## Underlines
+
+Applications can choose colored underline styles without changing text
+color:
+
+| SGR | Effect |
+| --- | --- |
+| `4:1` | Single underline |
+| `4:2` | Double underline |
+| `4:3` | Curly underline |
+| `4:4` | Dotted underline |
+| `4:5` | Dashed underline |
+| `4:0` or `24` | Disable underline |
+| `58` | Set indexed or RGB underline color |
+| `59` | Use the text foreground for the underline |
+
+For example, this prints text with a red curly underline, then resets:
+
+```sh
+printf '\033[4:3;58:2::255:0:0munderlined\033[0m\n'
+```
+
+Style and color survive cursor saves, screen updates and history, and SGR
+reset clears both. `UNDERCURL_STYLE` selects rounded, spiky or capped curls,
+with spiky as the default. Strokes stay inside their cells; dotted and
+dashed patterns align across runs and partial redraws. The `Su` terminfo
+capability advertises underline-style support; install the updated `st.info`
+entries for applications to discover it.
+
+The parser keeps colon subparameters separate from following semicolon
+attributes, including omitted fields. For foreground (38), background (48)
+and underline (58), RGB forms include `38:2::r:g:b`, `38:2:0:r:g:b`,
+`38:2:r:g:b` and `38;2;r;g;b`. Malformed or unsupported color spaces are
+rejected without swallowing the following attribute; diagnostics identify
+the relevant 38, 48 or 58 attribute.
+
+Cells remain 16 bytes, checked at compile time: Unicode uses 21 bits,
+attributes 18, foreground and background 25 each, and underline color 26
+including a default-color sentinel. Three attribute bits hold underline
+style. At 16 bytes a cell, 65,536 full 200-column history rows take about
+200 MiB.
+
+The renderer creates one underline GC lazily and caches up to 16 RGB
+underline colors. Eviction frees the old allocation; reloading the palette
+clears the cache. Indexed colors and the foreground reuse existing pixels,
+and allocation failure falls back to the foreground. If the GC cannot be
+allocated, the text is drawn without its underline and the next draw tries
+again.
+
+Run `tests/colors.sh` and `tests/rendering.sh` with `LC_ALL=C.UTF-8 sh`.
+They cover parsing, cell size, history round trips, malformed colors, cache
+reuse and eviction, allocation failure and balanced X resources.
+
+Curly underline coordinates clamp to X's 16-bit range, and empty glyph runs
+draw no curl. Long underlines are split at the server's request limit. The
+rendering suite checks each `UNDERCURL_STYLE`.

@@ -11,6 +11,8 @@ phist is an X11 terminal emulator forked from [st](https://st.suckless.org/).
   view](doc/input.md#input-and-replies).
 - [Configurable blinking cursor
   styles](doc/appearance.md#cursor-and-blinking).
+- [Colored single, double, curly, dotted and dashed
+  underlines](doc/appearance.md#underlines).
 
 ## Build
 

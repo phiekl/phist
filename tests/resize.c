@@ -146,6 +146,21 @@ main(int argc, char **argv)
 			wide_pairs(term.line[i]);
 	}
 
+	/* Visible blank cells survive trimming and count when deciding to reflow. */
+	reset(10, 4);
+	put("A\033[7m   \033[0m\r\nB\033[4:3;58:5:2m   \033[0m\r\nC\033[9m   \033[0m");
+	tresize(3, 8);
+	assert(term.line[0][1].mode & ATTR_REVERSE);
+	assert(term.line[1][0].mode & ATTR_REVERSE);
+	assert(USTYLE(term.line[2][1]) == 3 && term.line[2][1].ucolor == 2);
+	assert(USTYLE(term.line[3][0]) == 3 && term.line[3][0].ucolor == 2);
+	assert(term.line[4][1].mode & ATTR_STRUCK);
+	assert(term.line[5][0].mode & ATTR_STRUCK);
+	tresize(10, 8);
+	assert(term.line[0][3].mode & ATTR_REVERSE);
+	assert(USTYLE(term.line[1][3]) == 3 && term.line[1][3].ucolor == 2);
+	assert(term.line[2][3].mode & ATTR_STRUCK);
+
 	/* A styled blank row below the cursor is content too. */
 	reset(10, 4);
 	put("prompt\033[3;1H\033[7m    \033[0m\033[H");

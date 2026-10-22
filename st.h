@@ -12,13 +12,16 @@
 #define DEFAULT(a, b)		(a) = (a) ? (a) : (b)
 #define LIMIT(x, a, b)		(x) = (x) < (a) ? (a) : (x) > (b) ? (b) : (x)
 #define ATTRCMP(a, b)		((a).mode != (b).mode || (a).fg != (b).fg || \
-				(a).bg != (b).bg)
+				(a).bg != (b).bg || (a).ucolor != (b).ucolor)
 #define TIMEDIFF(t1, t2)	((t1.tv_sec-t2.tv_sec)*1000 + \
 				(t1.tv_nsec-t2.tv_nsec)/1E6)
 #define MODBIT(x, set, bit)	((set) ? ((x) |= (bit)) : ((x) &= ~(bit)))
 
 #define TRUECOLOR(r,g,b)	(1 << 24 | (r) << 16 | (g) << 8 | (b))
 #define IS_TRUECOL(x)		(1 << 24 & (x))
+/* Outside the 25-bit indexed/truecolor range, fitting Glyph.ucolor. */
+#define UCOLOR_DEFAULT ((1U << 26) - 1)
+#define USTYLE(g) (((g).mode & ATTR_USTYLE) >> 13)
 
 enum glyph_attribute {
 	ATTR_NULL       = 0,
@@ -33,6 +36,7 @@ enum glyph_attribute {
 	ATTR_WRAP       = 1 << 8,
 	ATTR_WIDE       = 1 << 9,
 	ATTR_WDUMMY     = 1 << 10,
+	ATTR_USTYLE     = 7 << 13,
 	ATTR_WPAD       = 1 << 16, /* padding before a wide glyph on the next row */
 	ATTR_BOLD_FAINT = ATTR_BOLD | ATTR_FAINT,
 };
@@ -62,11 +66,17 @@ typedef uint_least32_t Rune;
 
 #define Glyph Glyph_
 typedef struct {
-	Rune u;           /* character code */
-	uint32_t mode;    /* attribute flags */
-	uint32_t fg;      /* foreground  */
-	uint32_t bg;      /* background  */
+	/* Unicode needs 21 bits; colors need RGB plus the truecolor flag. */
+	uint64_t u : 21;
+	uint64_t mode : 18;   /* attribute flags; one spare bit */
+	uint64_t fg : 25;
+	uint64_t bg : 25;
+	uint64_t ucolor : 26; /* indexed/RGB underline color or UCOLOR_DEFAULT */
+	uint64_t : 13;
 } Glyph;
+
+/* Keep underline colors and reflow flags within the original cell budget. */
+typedef char glyph_size_must_be_16[(sizeof(Glyph) == 16) ? 1 : -1];
 
 typedef Glyph *Line;
 
