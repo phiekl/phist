@@ -121,7 +121,8 @@ typedef struct {
 	Atom xtarget;
 	char *primary, *clipboard;
 	struct timespec tclick1;
-	struct timespec tclick2;
+	int clicks, clickcol, clickrow;
+	uint clickstate;
 } XSelection;
 
 /* Font structure */
@@ -488,6 +489,9 @@ mousesel(XEvent *e, int done)
 	int type, seltype = SEL_REGULAR;
 	uint state = e->xbutton.state & ~(Button1Mask | forcemousemod);
 
+	if (evcol(e) != xsel.clickcol || evrow(e) != xsel.clickrow)
+		xsel.clicks = 0;
+
 	for (type = 1; type < LEN(selmasks); ++type) {
 		if (match(selmasks[type], state)) {
 			seltype = type;
@@ -603,6 +607,25 @@ mouseaction(XEvent *e, uint release)
 	return 0;
 }
 
+/* Successive clicks at the same cell expand through unique regex matches. */
+static int
+clicksnap(int col, int row, uint state, struct timespec now)
+{
+	unsigned int timeout = xsel.clicks == 1 ? doubleclicktimeout : tripleclicktimeout;
+
+	state &= ~(Button1Mask | LockMask);
+	if (xsel.clicks && col == xsel.clickcol && row == xsel.clickrow &&
+	    state == xsel.clickstate && TIMEDIFF(now, xsel.tclick1) <= timeout)
+		xsel.clicks = MIN(xsel.clicks + 1, (int)LEN(selectionpatterns) + 2);
+	else
+		xsel.clicks = 1;
+	xsel.clickcol = col;
+	xsel.clickrow = row;
+	xsel.clickstate = state;
+	xsel.tclick1 = now;
+	return xsel.clicks == 1 ? 0 : SNAP_REGEX + xsel.clicks - 2;
+}
+
 void
 bpress(XEvent *e)
 {
@@ -610,6 +633,10 @@ bpress(XEvent *e)
 	struct timespec now;
 	int snap;
 
+	if (btn != Button1)
+		xsel.clicks = 0;
+
+	/* The wheel scrolls history, also beneath alternate-screen programs. */
 	if (btn == Button4 || btn == Button5) {
 		Arg a;
 		if (IS_SET(MODE_MOUSE) && !(e->xbutton.state & forcemousemod)) {
@@ -630,6 +657,7 @@ bpress(XEvent *e)
 
 	if (btn == Button1 && match(XK_NO_MOD, e->xbutton.state & ~LockMask) &&
 	    (urlclick.text = tgeturl(evcol(e), evrow(e)))) {
+		xsel.clicks = 0;
 		urlclick.active = 1;
 		urlclick.col = evcol(e);
 		urlclick.row = evrow(e);
@@ -638,6 +666,7 @@ bpress(XEvent *e)
 	}
 
 	if (IS_SET(MODE_MOUSE) && !(e->xbutton.state & forcemousemod)) {
+		xsel.clicks = 0;
 		mousereport(e);
 		return;
 	}
@@ -646,22 +675,13 @@ bpress(XEvent *e)
 		return;
 
 	if (btn == Button1) {
-		/*
-		 * If the user clicks below predefined timeouts specific
-		 * snapping behaviour is exposed.
-		 */
 		clock_gettime(CLOCK_MONOTONIC, &now);
-		if (TIMEDIFF(now, xsel.tclick2) <= tripleclicktimeout) {
-			snap = SNAP_LINE;
-		} else if (TIMEDIFF(now, xsel.tclick1) <= doubleclicktimeout) {
-			snap = SNAP_WORD;
-		} else {
-			snap = 0;
+		snap = clicksnap(evcol(e), evrow(e), e->xbutton.state, now);
+		/* Once the largest match is selected, the next click starts over. */
+		if (!selstart(evcol(e), evrow(e), snap) && xsel.clicks > 2) {
+			xsel.clicks = 1;
+			selstart(evcol(e), evrow(e), 0);
 		}
-		xsel.tclick2 = xsel.tclick1;
-		xsel.tclick1 = now;
-
-		selstart(evcol(e), evrow(e), snap);
 	}
 }
 
@@ -1426,8 +1446,7 @@ xinit(int cols, int rows)
 	XMapWindow(xw.dpy, xw.win);
 	XSync(xw.dpy, False);
 
-	clock_gettime(CLOCK_MONOTONIC, &xsel.tclick1);
-	clock_gettime(CLOCK_MONOTONIC, &xsel.tclick2);
+	xsel.clicks = 0;
 	xsel.primary = NULL;
 	xsel.clipboard = NULL;
 	xsel.xtarget = XInternAtom(xw.dpy, "UTF8_STRING", 0);

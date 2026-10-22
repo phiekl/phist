@@ -32,9 +32,25 @@ static float chscale = 1.0;
 /*
  * word delimiter string
  *
- * More advanced example: L" `'\"()[]{}"
+ * Fallback word selection: keep . - _ @ / within words.
  */
-wchar_t *worddelimiters = L" ";
+wchar_t *worddelimiters = L" \t\r\n`~!#$%^&*()=+[{]}\\|;:'\",<>?";
+
+/*
+ * Additional multi-click selections, expanded from shortest to longest.
+ * POSIX extended regexes; the first capture is selected.
+ * Patterns select words/email addresses, paths, phrases and whole lines.
+ * Paths allow final . and .. components and internal dots in filenames,
+ * while leaving trailing sentence periods out.
+ */
+const char *selectionpatterns[] = {
+	"([0-9A-Za-z][0-9A-Za-z._@-]*[0-9A-Za-z]|[0-9A-Za-z])",
+	"(((~|\\.{1,2})?/|[0-9A-Za-z_.-]+/)([0-9A-Za-z_.-]+/)*"
+	"([0-9A-Za-z_.-]*[0-9A-Za-z_-]|\\.{1,2})/?)",
+	"([0-9A-Za-z][0-9A-Za-z._@,;[:space:]-]*[0-9A-Za-z][.:]?)",
+	"^(.*)$",
+	NULL
+};
 
 /* selection timeouts (in milliseconds) */
 static unsigned int doubleclicktimeout = 300;

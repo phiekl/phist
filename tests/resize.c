@@ -75,10 +75,25 @@ main(int argc, char **argv)
 	assert(sb.max_width == 3);
 
 	if (wcwidth(0x754C) == 2) {
+		/* A colored but invisible margin cell is omitted when copying a wrap. */
+		reset(5, 8);
+		put("\033[31m\033[Kabcd\344\270\255ef\033[m");
+		assert(term.line[0][4].mode == (ATTR_WRAP | ATTR_WPAD));
+		selstart(0, 1, SNAP_REGEX + 100);
+		selextend(0, 1, SEL_REGULAR, 1);
+		copied = getsel();
+		assert(copied && !strcmp(copied, "abcd\344\270\255ef"));
+		free(copied);
+
 		/* Output wrapping a wide glyph is soft wrapping too. */
 		reset(5, 8);
 		put("abcd\344\270\255ef");
 		assert(term.line[0][4].mode == (ATTR_WRAP | ATTR_WPAD));
+		selstart(0, 1, SNAP_REGEX + 100);
+		selextend(0, 1, SEL_REGULAR, 1);
+		copied = getsel();
+		assert(copied && !strcmp(copied, "abcd\344\270\255ef"));
+		free(copied);
 		tresize(10, 8);
 		assert(term.line[0][4].u == 0x4E2D && term.line[0][6].u == 'e');
 		assert(term.line[0][7].u == 'f' && term.c.y == 0 && term.c.x == 8);

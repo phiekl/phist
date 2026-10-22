@@ -55,7 +55,8 @@ enum selection_type {
 
 enum selection_snap {
 	SNAP_WORD = 1,
-	SNAP_LINE = 2
+	SNAP_LINE = 2,
+	SNAP_REGEX = 3 /* higher values select progressively larger matches */
 };
 
 typedef unsigned char uchar;
@@ -114,7 +115,7 @@ void resettitle(void);
 
 void selclear(void);
 void selinit(void);
-void selstart(int, int, int);
+int selstart(int, int, int);
 void selextend(int, int, int, int);
 int selected(int, int);
 char *getsel(void);
@@ -139,6 +140,7 @@ extern char *scroll;
 extern char *stty_args;
 extern char *vtiden;
 extern wchar_t *worddelimiters;
+extern const char *selectionpatterns[];
 extern int allowaltscreen;
 extern int allowwindowops;
 extern char *termname;

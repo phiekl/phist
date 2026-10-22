@@ -7,7 +7,8 @@ char *utmp, *scroll, *stty_args, *vtiden, *termname;
 wchar_t *worddelimiters = L" ";
 const char *selectionpatterns[] = {
 	"([0-9A-Za-z][0-9A-Za-z._@-]*[0-9A-Za-z]|[0-9A-Za-z])",
-	"(\\.?(/[0-9A-Za-z][0-9A-Za-z._-]*[0-9A-Za-z])+)",
+	"(((~|\\.{1,2})?/|[0-9A-Za-z_.-]+/)([0-9A-Za-z_.-]+/)*"
+	"([0-9A-Za-z_.-]*[0-9A-Za-z_-]|\\.{1,2})/?)",
 	"([0-9A-Za-z][0-9A-Za-z._@,;[:space:]-]*[0-9A-Za-z][.:]?)",
 	"^(.*)$",
 	NULL

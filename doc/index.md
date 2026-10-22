@@ -9,3 +9,4 @@ change. Settings live in `config.def.h` and take effect through `config.h`.
 - [Keyboard input and terminal replies](input.md): How user input and automatic protocol replies reach the child process.
 - [Appearance and text rendering](appearance.md): Configure the cursor and the way terminal text is drawn.
 - [Clickable URLs](urls.md): Recognize, underline and copy URLs from the screen or history.
+- [Text selection and clipboard](selection.md): Select words, paths and logical lines, and copy text to other programs.

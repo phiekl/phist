@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <pwd.h>
+#include <regex.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -37,6 +38,7 @@
 #define ESC_ARG_SIZ   16
 #define CAR_PER_ARG   6
 #define URLTARGET_MAX 2048 /* characters of a URL underlined and copied */
+#define SELCONTEXT    4096 /* cells either side of a click matched by selection patterns */
 #define STR_BUF_SIZ   ESC_BUF_SIZ
 #define STR_ARG_SIZ   ESC_ARG_SIZ
 
@@ -115,6 +117,10 @@ typedef struct {
 
 	int alt;
 } Selection;
+
+typedef struct {
+	int first, last;
+} SelMatch;
 
 /* Internal representation of the screen */
 typedef struct {
@@ -219,6 +225,7 @@ static void selnormalize(void);
 static void selscroll(int, int);
 static void selpushed(int, int, int);
 static void selsnap(int *, int *, int);
+static void selregex(int *, int *, int);
 
 static size_t utf8decode(const char *, Rune *, size_t);
 static Rune utf8decodebyte(char, size_t *);
@@ -286,6 +293,8 @@ typedef struct
 } Scrollback;
 
 static Scrollback sb;
+static regex_t *selpatterns; /* compiled selectionpatterns */
+static int nselpatterns;
 
 static int
 sb_phys_index(int logical_idx)
@@ -1241,9 +1250,28 @@ base64dec(const char *src)
 void
 selinit(void)
 {
+	char error[256];
+	int i, n;
+
 	sel.mode = SEL_IDLE;
 	sel.snap = 0;
 	sel.ob.x = -1;
+
+	/* Report configuration errors at startup rather than on a later click. */
+	if (selpatterns)
+		return;
+	for (nselpatterns = 0; selectionpatterns[nselpatterns]; nselpatterns++)
+		;
+	selpatterns = xmalloc(MAX(1, nselpatterns) * sizeof(*selpatterns));
+	for (i = 0; i < nselpatterns; i++) {
+		n = regcomp(&selpatterns[i], selectionpatterns[i], REG_EXTENDED);
+		if (n) {
+			regerror(n, &selpatterns[i], error, sizeof(error));
+			die("invalid selection pattern %d: %s\n", i, error);
+		}
+		if (!selpatterns[i].re_nsub)
+			die("selection pattern %d needs a capture group\n", i);
+	}
 }
 
 static int
@@ -1263,9 +1291,12 @@ tlinelen_render(int y)
 	return tlinelen(renderline(y));
 }
 
-void
+int
 selstart(int col, int row, int snap)
 {
+	int had = sel.ob.x != -1 && sel.alt == IS_SET(MODE_ALTSCREEN);
+	int bx = sel.nb.x, by = sel.nb.y, ex = sel.ne.x, ey = sel.ne.y;
+
 	selclear();
 	sel.mode = SEL_EMPTY;
 	sel.type = SEL_REGULAR;
@@ -1278,6 +1309,9 @@ selstart(int col, int row, int snap)
 	if (sel.snap != 0)
 		sel.mode = SEL_READY;
 	tsetdirt(sel.nb.y, sel.ne.y);
+	/* Report whether this replaced the previous selection with another range. */
+	return !had || bx != sel.nb.x || by != sel.nb.y ||
+	       ex != sel.ne.x || ey != sel.ne.y;
 }
 
 void
@@ -1353,6 +1387,152 @@ selected(int x, int y)
 	    && (y != sel.ne.y || x <= sel.ne.x);
 }
 
+static int
+selmatchcmp(const void *a, const void *b)
+{
+	const SelMatch *ma = a, *mb = b;
+	int alen = ma->last - ma->first, blen = mb->last - mb->first;
+
+	if (alen != blen)
+		return alen < blen ? -1 : 1;
+	return (ma->first > mb->first) - (ma->first < mb->first);
+}
+
+/* Row of a cell index counted from the first row, rounding down if negative. */
+static int
+selrowof(int n)
+{
+	return n >= 0 ? n / term.col : -((term.col - 1 - n) / term.col);
+}
+
+/*
+ * Match at most SELCONTEXT cells on either side of the click, mapping UTF-8
+ * byte offsets back to cells. Matches touching a truncated end expand to the
+ * whole logical line instead of selecting arbitrary fragments.
+ */
+static void
+selregex(int *x, int *y, int direction)
+{
+	SelMatch *matches;
+	regmatch_t match[2];
+	Line line;
+	char *text;
+	int *cells;
+	int first = *y, last = *y, row, col, width, n, i, count = 0;
+	int snap = sel.snap, bx = *x, by = *y, ex = *x, ey = *y;
+	int context = (SELCONTEXT + term.col - 1) / term.col, cuthead, cuttail, cut = 0;
+	size_t capacity, length = 0, point = SIZE_MAX, offset, begin, end;
+	char utf8[UTF_SIZ];
+
+	while (first > *y - context && (line = viewline(first - 1)) &&
+	       line[term.col - 1].mode & ATTR_WRAP)
+		first--;
+	while (last < *y + context && (line = viewline(last)) &&
+	       line[term.col - 1].mode & ATTR_WRAP && viewline(last + 1))
+		last++;
+	/* Matches running into a cut end would select arbitrary fragments. */
+	cuthead = (line = viewline(first - 1)) && line[term.col - 1].mode & ATTR_WRAP;
+	cuttail = (line = viewline(last)) && line[term.col - 1].mode & ATTR_WRAP &&
+	          viewline(last + 1);
+
+	capacity = (size_t)(last - first + 1) * term.col * UTF_SIZ + 1;
+	text = xmalloc(capacity);
+	cells = xmalloc(capacity * sizeof(*cells));
+	for (row = first; row <= last; row++) {
+		line = renderline(row);
+		width = row < last ? term.col : tlinelen(line);
+		if (row == *y)
+			width = MAX(width, *x + 1);
+		for (col = 0; col < width; col++) {
+			if (line[col].mode & (ATTR_WDUMMY | ATTR_WPAD))
+				continue;
+			if (row == *y && (col == *x ||
+			    ((line[col].mode & ATTR_WIDE) && col + 1 == *x)))
+				point = length;
+			n = utf8encode(line[col].u ? line[col].u : ' ', utf8);
+			for (i = 0; i < n; i++) {
+				text[length] = utf8[i];
+				cells[length++] = (row - first) * term.col + col;
+			}
+		}
+	}
+	text[length] = '\0';
+
+	/* Keep phist's word selection as a candidate, including punctuation/Unicode. */
+	matches = xmalloc((nselpatterns + 2) * sizeof(*matches));
+	sel.snap = SNAP_WORD;
+	selsnap(&bx, &by, -1);
+	selsnap(&ex, &ey, +1);
+	sel.snap = snap;
+	matches[count++] = (SelMatch){ (by - first) * term.col + bx,
+	                              (ey - first) * term.col + ex };
+	for (i = 0; i < nselpatterns && point != SIZE_MAX; i++) {
+		for (offset = 0; offset <= length; ) {
+#ifdef REG_STARTEND
+			/* Avoid regexec() measuring the remaining text on every call. */
+			match[0].rm_so = offset;
+			match[0].rm_eo = length;
+			if (regexec(&selpatterns[i], text, 2, match,
+			            REG_STARTEND | (offset ? REG_NOTBOL : 0)))
+				break;
+			match[0].rm_so -= offset;
+			match[0].rm_eo -= offset;
+			match[1].rm_so -= match[1].rm_so >= 0 ? offset : 0;
+			match[1].rm_eo -= match[1].rm_eo >= 0 ? offset : 0;
+#else
+			if (regexec(&selpatterns[i], text + offset, 2, match,
+			            offset ? REG_NOTBOL : 0))
+				break;
+#endif
+			if (match[1].rm_so >= 0 && match[1].rm_eo > match[1].rm_so) {
+				begin = offset + match[1].rm_so;
+				end = offset + match[1].rm_eo;
+				if (begin <= point && point < end) {
+					if ((cuthead && begin == 0) || (cuttail && end == length)) {
+						cut = 1;
+						break;
+					}
+					bx = cells[begin];
+					ex = cells[end - 1];
+					line = renderline(first + ex / term.col);
+					if (line[ex % term.col].mode & ATTR_WIDE)
+						ex++;
+					matches[count++] = (SelMatch){ bx, ex };
+					break;
+				}
+			}
+			if (offset + match[0].rm_so > point)
+				break;
+			offset += MAX(1, match[0].rm_eo);
+		}
+	}
+	/* A match running past the examined text grows to the whole line. */
+	if (cut) {
+		bx = ex = *x;
+		by = ey = *y;
+		sel.snap = SNAP_LINE;
+		selsnap(&bx, &by, -1);
+		selsnap(&ex, &ey, +1);
+		sel.snap = snap;
+		/* End at its text, like a "^(.*)$" pattern would. */
+		ex = MAX(0, tlinelen_render(ey) - 1);
+		matches[count++] = (SelMatch){ (by - first) * term.col + bx,
+		                              (ey - first) * term.col + ex };
+	}
+	qsort(matches, count, sizeof(*matches), selmatchcmp);
+	for (i = 0, n = 0; i < count; i++)
+		if (!n || matches[i].first != matches[n - 1].first ||
+		    matches[i].last != matches[n - 1].last)
+			matches[n++] = matches[i];
+	i = MIN(snap - SNAP_REGEX, n - 1);
+	n = direction < 0 ? matches[i].first : matches[i].last;
+	*y = first + selrowof(n);
+	*x = n - selrowof(n) * term.col;
+	free(matches);
+	free(cells);
+	free(text);
+}
+
 void
 selsnap(int *x, int *y, int direction)
 {
@@ -1360,6 +1540,11 @@ selsnap(int *x, int *y, int direction)
 	int delim, prevdelim;
 	const Glyph *gp, *prevgp;
 	Line line;
+
+	if (sel.snap >= SNAP_REGEX) {
+		selregex(x, y, direction);
+		return;
+	}
 
 	switch (sel.snap) {
 	case SNAP_WORD:
@@ -2066,17 +2251,17 @@ selscroll(int orig, int n)
 	if (sel.ob.x == -1 || sel.alt != IS_SET(MODE_ALTSCREEN))
 		return;
 
-	if (BETWEEN(sel.nb.y, top, bot) != BETWEEN(sel.ne.y, top, bot)) {
+	if (sel.ne.y < top || sel.nb.y > bot)
+		return;
+	if (sel.nb.y < top || sel.ne.y > bot ||
+	    sel.nb.y + n < top || sel.ne.y + n > bot) {
 		selclear();
-	} else if (BETWEEN(sel.nb.y, top, bot)) {
+	} else {
+		/* The selected text moved intact; do not re-run snapping or regexes. */
+		sel.nb.y += n;
+		sel.ne.y += n;
 		sel.ob.y += n;
 		sel.oe.y += n;
-		if (sel.ob.y < top || sel.ob.y > bot ||
-		    sel.oe.y < top || sel.oe.y > bot) {
-			selclear();
-		} else {
-			selnormalize();
-		}
 	}
 }
 
