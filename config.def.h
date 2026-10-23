@@ -93,6 +93,41 @@ static unsigned int cursorthickness = 2;
  */
 static int bellvolume = 0;
 
+/* Visual bell: static edge glow, travelling wave, ripple, inward wave, pulse. */
+enum { VBELL_GLOW, VBELL_WAVE, VBELL_RIPPLE, VBELL_INWARD, VBELL_PULSE };
+static int vbelleffect = VBELL_PULSE;
+
+/* Duration in ms (0 disables it): 150 suits the pulse, 300 the other
+ * animations, 50 the edge glow. */
+static int vbelltimeout = 150;
+static unsigned int vbellinterval = 16; /* animation frame interval in ms */
+
+/* Gradient colors as 0xRRGGBB: trail/outer edge and crest/inner edge. */
+
+// Evening Sunshine
+//static unsigned int vbellcolor = 0xb92b27;
+//static unsigned int vbellinnercolor = 0x1565c0;
+
+// Flare
+//static unsigned int vbellcolor = 0xf12711;
+//static unsigned int vbellinnercolor = 0xf5af19;
+
+// Cosmic Fusion
+//static unsigned int vbellcolor = 0xff00cc;
+//static unsigned int vbellinnercolor = 0x333399;
+
+// Crimson Silence
+//static unsigned int vbellcolor = 0xc11e38;
+//static unsigned int vbellinnercolor = 0x220b34;
+
+// Lightning
+static unsigned int vbellcolor = 0xffffff;
+static unsigned int vbellinnercolor = 0x000000;
+
+/* Glow/band width in pixels and peak opacity (0-1). */
+static unsigned int vbellwidth = 512;
+static double vbellopacity = 0.5;
+
 /* default TERM value */
 char *termname = "phist-256color";
 

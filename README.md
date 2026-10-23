@@ -23,11 +23,12 @@ phist is an X11 terminal emulator forked from [st](https://st.suckless.org/).
   `-d`.
 - [Optional color emoji](doc/appearance.md#emoji-presentation) with
   presentation-selector support.
+- [Configurable visual bell animations](doc/appearance.md#visual-bell).
 
 ## Build
 
 Requires a C compiler, make, pkg-config, development libraries for Xlib, Xft,
-Fontconfig and FreeType, and `tic` from ncurses.
+XRender, Fontconfig and FreeType, and `tic` from ncurses.
 
 ```sh
 make

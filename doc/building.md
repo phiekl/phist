@@ -62,3 +62,10 @@ Relative `-o` output-log and `-l` terminal-device paths still refer to the
 launching directory: phist opens those before changing directory. In shell
 mode, the child changes directory before execution; in line mode, phist changes
 directory after opening the files and before invoking `stty`.
+
+## Dependencies
+
+Building requires a C compiler and development files for Xlib, Xft, XRender,
+Fontconfig and FreeType. `pkg-config` supplies Fontconfig and FreeType
+flags. XRender supplies the visual-bell overlay; desktop transparency and a
+compositing window manager are not required.

@@ -116,3 +116,53 @@ reused only for the character for which it was cached.
 Run `LC_ALL=C.UTF-8 sh tests/emoji.sh` and `LC_ALL=C.UTF-8 sh
 tests/presentation.sh`. They check coverage, selectors, fallback choice,
 missing fonts, fitting, styles, cache reuse and alignment.
+
+## Visual bell
+
+The visual bell blends an animation over the current terminal content. Try
+it in a new phist window with `printf '\a'`. Choose `vbelleffect` in
+`config.h`:
+
+| Value | Effect |
+| --- | --- |
+| `VBELL_GLOW` | Static gradient along the window edges |
+| `VBELL_WAVE` | Vertical band travelling left to right |
+| `VBELL_RIPPLE` | Circular wave expanding from the center |
+| `VBELL_INWARD` | Rectangular wave moving inward from the edges |
+| `VBELL_PULSE` | Whole-window tint that brightens and fades |
+
+XRender gradients reach 32,767 pixels, so in a wider window a wave or ripple
+past that point is not drawn.
+
+Defaults select a 150 ms pulse at 50% peak opacity, transitioning from white
+to black. The settings are:
+
+| Setting | Meaning | Default |
+| --- | --- | --- |
+| `vbelltimeout` | Duration in ms; zero disables the effect | 150 |
+| `vbellinterval` | Frame interval in ms | 16 |
+| `vbellwidth` | Glow depth or band width in pixels | 512 |
+| `vbellopacity` | Peak opacity from 0 to 1 | 0.5 |
+| `vbellcolor` | Trail or outer-edge RGB color | `0xffffff` |
+| `vbellinnercolor` | Crest or inner-edge RGB color | `0x000000` |
+
+Colors use `0xRRGGBB`. The pulse moves between the two colors over time; the
+glow blends them across its depth and fades into the content. For a short
+red-to-yellow edge glow, try `VBELL_GLOW`, 50 ms, 96 pixels, opacity 0.6,
+and colors `0xff0000` and `0xffff00`. Other color pairs are commented out in
+`config.def.h`. Regenerate `config.h` to adopt changed defaults, as
+explained in [building](building.md#build-and-configure).
+
+Each frame starts with a clean copy of the terminal back buffer, so tint
+does not accumulate. Text and cursor updates remain live underneath.
+Receiving a bell records or restarts the effect; the event loop draws its
+frames, including while idle. A burst does not force extra redraws or
+postpone an already due frame. Frame deadlines remain bounded under
+continuous output, expiry restores the normal image, hidden windows avoid
+animation wakeups, and resizing recreates overlay resources.
+
+Run `LC_ALL=C.UTF-8 sh tests/bell.sh`. Pixel-buffer checks cover all
+effects, custom colors, geometry, alpha blending, clean redraws, deadlines,
+repeated bells, expiry, resize and tiny windows. Test-owned colors keep
+checks independent of configured defaults. Expose handling also verifies
+that a pending resize is applied only once.

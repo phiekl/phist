@@ -164,6 +164,7 @@ static int xicdestroy(XIC, XPointer, XPointer);
 static void xinit(int, int);
 static void cresize(int, int);
 static void xresize(int, int);
+static void vbellfree(void);
 static void xhints(void);
 static int xloadcolor(int, const char *, Color *);
 static int xloadfont(Font *, FcPattern *);
@@ -872,6 +873,7 @@ xresize(int col, int row)
 	win.tw = col * win.cw;
 	win.th = row * win.ch;
 
+	vbellfree();
 	XFreePixmap(xw.dpy, xw.buf);
 	xw.buf = XCreatePixmap(xw.dpy, xw.win, win.w, win.h,
 			DefaultDepth(xw.dpy, xw.scr));
@@ -2361,6 +2363,249 @@ xsettitle(char *p)
 	XFree(prop.value);
 }
 
+
+static int vbellset = 0; /* 1 during visual bell, 0 otherwise */
+static struct timespec lastvbell = {0}, lastvbellframe = {0};
+static struct {
+	Pixmap buf;
+	Draw draw;
+} vbell;
+
+static void
+vbellfree(void)
+{
+	if (vbell.draw)
+		XftDrawDestroy(vbell.draw);
+	if (vbell.buf)
+		XFreePixmap(xw.dpy, vbell.buf);
+	vbell.draw = NULL;
+	vbell.buf = None;
+}
+
+static double
+vbellsmooth(double t)
+{
+	t = MAX(0, MIN(1, t));
+	return t * t * (3 - 2 * t);
+}
+
+/* Straight RGBA for gradient stops; rectangle fills need premultiplication. */
+static XRenderColor
+vbellblend(double mix, double strength)
+{
+	double alpha = MAX(0, MIN(1, vbellopacity)) * MAX(0, MIN(1, strength));
+	XRenderColor color;
+
+	mix = MAX(0, MIN(1, mix));
+	color.red = (ushort)(257 * (((vbellcolor >> 16) & 255) * (1 - mix) +
+	                          ((vbellinnercolor >> 16) & 255) * mix));
+	color.green = (ushort)(257 * (((vbellcolor >> 8) & 255) * (1 - mix) +
+	                            ((vbellinnercolor >> 8) & 255) * mix));
+	color.blue = (ushort)(257 * ((vbellcolor & 255) * (1 - mix) +
+	                           (vbellinnercolor & 255) * mix));
+	color.alpha = (ushort)(65535 * alpha);
+	return color;
+}
+
+static XRenderColor
+vbellpremultiply(XRenderColor color)
+{
+	color.red = (uint32_t)color.red * color.alpha / 65535;
+	color.green = (uint32_t)color.green * color.alpha / 65535;
+	color.blue = (uint32_t)color.blue * color.alpha / 65535;
+	return color;
+}
+
+/* Static glow along the window edges. */
+static XRenderColor
+vbellcolorat(int inset, int depth)
+{
+	double t = depth > 1 ? (double)inset / (depth - 1) : 0;
+
+	return vbellpremultiply(vbellblend(vbellsmooth(t / 0.8),
+	                                  1 - vbellsmooth((t - 0.6) / 0.4)));
+}
+
+/* Soft band with a colored trail and a brighter leading crest. */
+static XRenderColor
+vbellbandcolor(double offset)
+{
+	double strength = MAX(0, 1 - offset * offset);
+
+	return vbellblend(vbellsmooth((offset + 1) / 1.5), strength * strength);
+}
+
+static double
+vbellprogress(struct timespec now)
+{
+	return vbelltimeout > 0 ? MAX(0, MIN(1, TIMEDIFF(now, lastvbell) / vbelltimeout)) : 1;
+}
+
+static int
+vbellanimated(void)
+{
+	return BETWEEN(vbelleffect, VBELL_WAVE, VBELL_PULSE);
+}
+
+/* Convert to XRender's signed 16.16 format, clamping before conversion to
+ * avoid overflow in windows wider than its coordinate range. */
+static XFixed
+xfixed(double v)
+{
+	if (!(v > -32768))
+		return INT_MIN;
+	return v >= 32768 ? INT_MAX : XDoubleToFixed(v);
+}
+
+/* Create a horizontal gradient; return 0 if clamping collapses its endpoints. */
+static int
+xgradientline(XLinearGradient *line, double x1, double x2)
+{
+	line->p1 = (XPointFixed){ xfixed(x1), 0 };
+	line->p2 = (XPointFixed){ xfixed(x2), 0 };
+	return line->p1.x < line->p2.x;
+}
+
+/* Create concentric gradient rings; return 0 if their clamped radii coincide. */
+static int
+vbellcircles(XRadialGradient *radial, double inner, double outer)
+{
+	radial->inner = (XCircle){ xfixed(win.w / 2.0), xfixed(win.h / 2.0), xfixed(inner) };
+	if (radial->inner.radius == INT_MAX)
+		return 0;
+	radial->outer = (XCircle){ radial->inner.x, radial->inner.y,
+	                           MAX(radial->inner.radius + 1, xfixed(outer)) };
+	return 1;
+}
+
+static Drawable
+vbellrender(double progress)
+{
+	XRenderColor color, colors[33];
+	XFixed stops[33];
+	XRectangle rects[4];
+	Picture picture, gradient;
+	XLinearGradient linear;
+	XRadialGradient radial;
+	double half = vbellwidth / 2.0, center, inner, outer, distance;
+	int inset, width, height, n, i;
+	int depth = (MIN(win.w, win.h) + 1) / 2;
+
+	if (!vbellset || depth < 1 || !vbellwidth || vbellopacity <= 0 ||
+	    (vbellanimated() && progress >= 1))
+		return xw.buf;
+	progress = MAX(0, MIN(1, progress));
+	if (!vbell.buf) {
+		vbell.buf = XCreatePixmap(xw.dpy, xw.win, win.w, win.h,
+		                         DefaultDepth(xw.dpy, xw.scr));
+		vbell.draw = XftDrawCreate(xw.dpy, vbell.buf, xw.vis, xw.cmap);
+	}
+	if (!vbell.draw || !(picture = XftDrawPicture(vbell.draw))) {
+		vbellfree();
+		return xw.buf;
+	}
+
+	/* Always start from normal content, including text/cursor updates. */
+	XCopyArea(xw.dpy, xw.buf, vbell.buf, dc.gc, 0, 0, win.w, win.h, 0, 0);
+	if (vbelleffect == VBELL_WAVE || vbelleffect == VBELL_RIPPLE) {
+		inner = 0;
+		outer = vbellwidth;
+		if (vbelleffect == VBELL_WAVE) {
+			center = -half + progress * (win.w + 2 * half);
+			if (!xgradientline(&linear, center - half, center + half))
+				return vbell.buf;
+		} else {
+			center = -half + progress * (hypot(win.w / 2.0, win.h / 2.0) + 2 * half);
+			inner = MAX(0, center - half);
+			outer = center + half;
+			if (outer <= 0)
+				return vbell.buf;
+			if (!vbellcircles(&radial, inner, outer))
+				return vbell.buf;
+		}
+		for (i = 0; i < LEN(stops); i++) {
+			stops[i] = XDoubleToFixed((double)i / (LEN(stops) - 1));
+			distance = inner + (outer - inner) * i / (LEN(stops) - 1);
+			colors[i] = vbellbandcolor(vbelleffect == VBELL_WAVE ?
+			                          2 * distance / vbellwidth - 1 :
+			                          (distance - center) / half);
+		}
+		gradient = vbelleffect == VBELL_WAVE ?
+		           XRenderCreateLinearGradient(xw.dpy, &linear, stops, colors, LEN(stops)) :
+		           XRenderCreateRadialGradient(xw.dpy, &radial, stops, colors, LEN(stops));
+		XRenderComposite(xw.dpy, PictOpOver, gradient, None, picture,
+		                 0, 0, 0, 0, 0, 0, win.w, win.h);
+		XRenderFreePicture(xw.dpy, gradient);
+		return vbell.buf;
+	}
+	if (vbelleffect == VBELL_PULSE) {
+		center = sin(3.141592653589793 * progress);
+		color = vbellpremultiply(vbellblend(vbellsmooth(progress), center * center));
+		rects[0] = (XRectangle){ 0, 0, win.w, win.h };
+		XRenderFillRectangles(xw.dpy, PictOpOver, picture, &color, rects, 1);
+		return vbell.buf;
+	}
+
+	center = -half + progress * (depth + 2 * half);
+	if (vbelleffect != VBELL_INWARD)
+		depth = MIN(vbellwidth, depth);
+	for (inset = 0; inset < depth; inset++) {
+		color = vbelleffect == VBELL_INWARD ?
+		        vbellpremultiply(vbellbandcolor((inset - center) / half)) :
+		        vbellcolorat(inset, depth);
+		if (!color.alpha)
+			continue;
+		width = win.w - 2 * inset;
+		height = win.h - 2 * inset;
+		n = 0;
+		rects[n++] = (XRectangle){ inset, inset, width, 1 };
+		if (height > 1)
+			rects[n++] = (XRectangle){ inset, inset + height - 1, width, 1 };
+		if (height > 2) {
+			rects[n++] = (XRectangle){ inset, inset + 1, 1, height - 2 };
+			if (width > 1)
+				rects[n++] = (XRectangle){ inset + width - 1, inset + 1, 1, height - 2 };
+		}
+		XRenderFillRectangles(xw.dpy, PictOpOver, picture, &color, rects, n);
+	}
+	return vbell.buf;
+}
+
+static void
+vbellbegin(void)
+{
+	clock_gettime(CLOCK_MONOTONIC, &lastvbell);
+	if (!vbellset)
+		lastvbellframe = (struct timespec){0};
+	vbellset = 1;
+}
+
+static double
+vbellremaining(struct timespec now)
+{
+	double remain;
+
+	if (!vbellset)
+		return -1;
+	remain = vbelltimeout - TIMEDIFF(now, lastvbell);
+	if (remain > 0)
+		return remain;
+	vbellset = 0;
+	return -1;
+}
+
+/* Wake for both the next animation frame and the final restoration. */
+static double
+vbellnextframe(struct timespec now)
+{
+	double remain = vbellremaining(now);
+
+	if (remain > 0 && vbellanimated() && IS_SET(MODE_VISIBLE))
+		remain = MIN(remain, MAX(0, (double)MAX(1, vbellinterval) -
+		                             TIMEDIFF(now, lastvbellframe)));
+	return remain;
+}
+
 int
 xstartdraw(void)
 {
@@ -2406,7 +2651,15 @@ xdrawline(Line line, int x1, int y1, int x2)
 void
 xfinishdraw(void)
 {
-	XCopyArea(xw.dpy, xw.buf, xw.win, dc.gc, 0, 0, win.w,
+	struct timespec now;
+	double progress = 0;
+
+	if (vbellset) {
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		progress = vbellprogress(now);
+		lastvbellframe = now;
+	}
+	XCopyArea(xw.dpy, vbellrender(progress), xw.win, dc.gc, 0, 0, win.w,
 			win.h, 0, 0);
 	XSetForeground(xw.dpy, dc.gc,
 			dc.col[IS_SET(MODE_REVERSE)?
@@ -2495,6 +2748,8 @@ xbell(void)
 		xseturgency(1);
 	if (bellvolume)
 		XkbBell(xw.dpy, xw.win, bellvolume, (Atom)NULL);
+	if (vbelltimeout)
+		vbellbegin();
 }
 
 void
@@ -2668,7 +2923,7 @@ run(void)
 	fd_set rfd;
 	int xfd = XConnectionNumber(xw.dpy), ttyfd, xev, drawing;
 	struct timespec seltv, *tv, now, trigger;
-	double timeout, urlremain;
+	double timeout, urlremain, bellremain;
 
 	/* Waiting for window mapping */
 	do {
@@ -2722,6 +2977,10 @@ run(void)
 				(handler[ev.type])(&ev);
 		}
 
+		if (vbellset)
+			clock_gettime(CLOCK_MONOTONIC, &now);
+		bellremain = vbellnextframe(now);
+
 		/*
 		 * To reduce flicker and tearing, when new content or event
 		 * triggers drawing, we first wait a bit to ensure we got
@@ -2740,6 +2999,8 @@ run(void)
 			}
 			timeout = (maxlatency - TIMEDIFF(now, trigger)) \
 			          / maxlatency * minlatency;
+			if (bellremain >= 0)
+				timeout = MIN(timeout, bellremain);
 			if (timeout > 0)
 				continue;  /* we have time, try to find idle */
 		}
@@ -2753,6 +3014,12 @@ run(void)
 			timeout = urlremain;
 
 		draw();
+		if (vbellset) {
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			bellremain = vbellnextframe(now);
+			if (bellremain >= 0 && (timeout < 0 || bellremain < timeout))
+				timeout = bellremain;
+		}
 		XFlush(xw.dpy);
 		drawing = 0;
 	}
