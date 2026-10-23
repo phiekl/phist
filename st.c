@@ -202,6 +202,7 @@ static void tmoveato(int, int);
 static void tnewline(int);
 static void tputtab(int);
 static void tputc(Rune);
+static void tpresentation(int);
 static void treset(void);
 static void tscrollup(int, int, int);
 static void tscrolldown(int, int);
@@ -3641,6 +3642,24 @@ eschandle(uchar ascii)
 	return 1;
 }
 
+static void
+tpresentation(int emoji)
+{
+	int x = term.c.x;
+	Glyph *gp;
+
+	if (!(term.c.state & CURSOR_WRAPNEXT)) {
+		if (x == 0)
+			return;
+		x--;
+	}
+	if (term.line[term.c.y][x].mode & ATTR_WDUMMY && x > 0)
+		x--;
+	gp = &term.line[term.c.y][x];
+	MODBIT(gp->mode, emoji != !!(gp->mode & ATTR_WIDE), ATTR_ALTPRES);
+	tdirtyscreen(term.c.y, term.c.y);
+}
+
 void
 tputc(Rune u)
 {
@@ -3745,6 +3764,11 @@ check_control_code:
 		 * All characters which form part of a sequence are not
 		 * printed
 		 */
+		return;
+	}
+	/* Variation selectors choose the presentation of the previous character. */
+	if (BETWEEN(u, 0xFE0E, 0xFE0F) && IS_SET(MODE_UTF8)) {
+		tpresentation(u == 0xFE0F);
 		return;
 	}
 

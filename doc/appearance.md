@@ -92,3 +92,27 @@ reuse and eviction, allocation failure and balanced X resources.
 Curly underline coordinates clamp to X's 16-bit range, and empty glyph runs
 draw no curl. Long underlines are split at the server's request limit. The
 rendering suite checks each `UNDERCURL_STYLE`.
+
+## Emoji presentation
+
+`emojifont` defaults to `Noto Color Emoji`. Set it to `NULL` or an empty
+string to disable the preference. It is tried for wide emoji unless followed
+by U+FE0E (text presentation), and for narrow characters followed by U+FE0F
+(emoji presentation), even when the main font has a monochrome glyph. ASCII
+stays in the main font. Text-style symbols such as arrows, check marks, ©
+and ™ normally keep the main font.
+
+The font is loaded lazily, fitted into the existing one- or two-cell width
+and reloaded on zoom. If it is missing, is not a color font or lacks the
+glyph, normal font selection takes over. Joined emoji sequences, flags and
+skin-tone combinations are not shaped.
+
+A variation selector is recorded on the preceding cell as one attribute bit
+indicating a change from the default presentation for its width; cells
+remain 16 bytes. For text presentation, a color fallback gives way to the
+first non-color font covering the character. A cached color fallback is
+reused only for the character for which it was cached.
+
+Run `LC_ALL=C.UTF-8 sh tests/emoji.sh` and `LC_ALL=C.UTF-8 sh
+tests/presentation.sh`. They check coverage, selectors, fallback choice,
+missing fonts, fitting, styles, cache reuse and alignment.

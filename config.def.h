@@ -6,6 +6,11 @@
  * font: see http://freedesktop.org/software/fontconfig/fontconfig-user.html
  */
 static char *font = "Liberation Mono:pixelsize=12:antialias=true:autohint=true";
+/*
+ * Prefer this color font for emoji presentation: wide emoji unless followed
+ * by U+FE0E, and narrow characters followed by U+FE0F.  NULL disables it.
+ */
+static char *emojifont = "Noto Color Emoji";
 static int borderpx = 2;
 
 /*

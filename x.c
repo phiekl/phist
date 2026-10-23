@@ -138,6 +138,7 @@ typedef struct {
 	short rbearing;
 	XftFont *match;
 	FcFontSet *set;
+	FcFontSet *textset; /* untrimmed, so later non-color fonts remain */
 	FcPattern *pattern;
 } Font;
 
@@ -167,6 +168,9 @@ static void xhints(void);
 static int xloadcolor(int, const char *, Color *);
 static int xloadfont(Font *, FcPattern *);
 static void xloadfonts(const char *, double);
+static XftFont *xloademojifont(int);
+static FcPattern *xtextfallback(FcFontSet *, FcPattern *, Rune);
+static FcPattern *xfallbackmatch(Font *, FcFontSet **, FcPattern *, Rune, int);
 static void xunloadfont(Font *);
 static void xunloadfonts(void);
 static void xsetenv(void);
@@ -279,22 +283,30 @@ enum {
 	FRC_NORMAL,
 	FRC_ITALIC,
 	FRC_BOLD,
-	FRC_ITALICBOLD
+	FRC_ITALICBOLD,
+	FRC_TEXT = 4 /* or'ed in: text presentation avoids color fonts */
 };
 
 typedef struct {
 	XftFont *font;
 	int flags;
 	Rune unicodep;
+	int color; /* a color font, cached for text only when nothing else had unicodep */
 } Fontcache;
 
 /* Fontcache is an array now. A new font will be appended to the array. */
+enum { CELL_MAX = 4096 }; /* largest font ascent or descent, in pixels */
 static Fontcache *frc = NULL;
 static int frclen = 0;
 static int frccap = 0;
 static char *usedfont = NULL;
 static double usedfontsize = 0;
 static double defaultfontsize = 0;
+/* Separate sizes keep both narrow symbols and wide emoji within their cells. */
+static struct {
+	XftFont *font;
+	int loaded;
+} emoji[2];
 
 static char *opt_class = NULL;
 static char **opt_cmd  = NULL;
@@ -1021,6 +1033,13 @@ xgeommasktogravity(int mask)
 	return SouthEastGravity;
 }
 
+/* Whether a font's ascent or descent is sane, and safe to do arithmetic on. */
+static int
+xmetricok(int value)
+{
+	return value >= -CELL_MAX && value <= CELL_MAX;
+}
+
 int
 xloadfont(Font *f, FcPattern *pattern)
 {
@@ -1080,7 +1099,7 @@ xloadfont(Font *f, FcPattern *pattern)
 		(const FcChar8 *) ascii_printable,
 		strlen(ascii_printable), &extents);
 
-	f->set = NULL;
+	f->set = f->textset = NULL;
 	f->pattern = configured;
 
 	f->ascent = f->match->ascent;
@@ -1164,6 +1183,108 @@ xloadfonts(const char *fontstr, double fontsize)
 	FcPatternDestroy(pattern);
 }
 
+/*
+ * First font in the sorted fallback set covering rune without being a color
+ * font, so text presentation stays text when some other font can draw it.
+ */
+static FcPattern *
+xtextfallback(FcFontSet *set, FcPattern *pattern, Rune rune)
+{
+	FcCharSet *charset;
+	FcBool color;
+	int i;
+
+	for (i = 0; set && i < set->nfont; i++) {
+		if (FcPatternGetCharSet(set->fonts[i], FC_CHARSET, 0, &charset) !=
+		    FcResultMatch || !FcCharSetHasChar(charset, rune))
+			continue;
+		if (FcPatternGetBool(set->fonts[i], FC_COLOR, 0, &color) ==
+		    FcResultMatch && color)
+			continue;
+		return FcFontRenderPrepare(NULL, pattern, set->fonts[i]);
+	}
+	return NULL;
+}
+
+/*
+ * Fontconfig's best fallback for rune; for text presentation, a color match
+ * gives way to the first non-color font covering rune, if any.
+ */
+static FcPattern *
+xfallbackmatch(Font *font, FcFontSet **sets, FcPattern *pattern, Rune rune,
+               int text)
+{
+	FcPattern *match, *mono;
+	FcResult result;
+	FcBool color;
+
+	match = FcFontSetMatch(0, sets, 1, pattern, &result);
+	if (!text || !match || FcPatternGetBool(match, FC_COLOR, 0, &color) !=
+	    FcResultMatch || !color)
+		return match;
+	if (!font->textset)
+		font->textset = FcFontSort(0, font->pattern, 0, 0, &result);
+	if ((mono = xtextfallback(font->textset, pattern, rune))) {
+		FcPatternDestroy(match);
+		match = mono;
+	}
+	return match;
+}
+
+/* Optional color font, sized to the available cells rather than changing widths. */
+XftFont *
+xloademojifont(int columns)
+{
+	FcPattern *pattern, *match;
+	FcResult result;
+	FcBool color;
+	XftFont *face;
+	double size = usedfontsize, scale;
+	int i, slot = columns - 1;
+
+	if (!emojifont || !*emojifont)
+		return NULL;
+	if (emoji[slot].loaded)
+		return emoji[slot].font;
+	emoji[slot].loaded = 1;
+
+	for (i = 0; i < 3; i++) {
+		if (!(pattern = FcNameParse((const FcChar8 *)emojifont)))
+			return NULL;
+		FcPatternDel(pattern, FC_SIZE);
+		FcPatternDel(pattern, FC_PIXEL_SIZE);
+		FcPatternAddDouble(pattern, FC_PIXEL_SIZE, MAX(1, size));
+		FcPatternAddBool(pattern, FC_COLOR, FcTrue);
+		FcConfigSubstitute(NULL, pattern, FcMatchPattern);
+		XftDefaultSubstitute(xw.dpy, xw.scr, pattern);
+		match = FcFontMatch(NULL, pattern, &result);
+		FcPatternDestroy(pattern);
+		if (!match)
+			return NULL;
+		/* Fontconfig may substitute a text font if no color font is installed. */
+		if (FcPatternGetBool(match, FC_COLOR, 0, &color) != FcResultMatch || !color) {
+			FcPatternDestroy(match);
+			return NULL;
+		}
+		if (!(face = XftFontOpenPattern(xw.dpy, match))) {
+			FcPatternDestroy(match);
+			return NULL;
+		}
+		/* Its metrics position glyphs within the cell. */
+		if (!xmetricok(face->ascent) || !xmetricok(face->height)) {
+			XftFontClose(xw.dpy, face);
+			return NULL;
+		}
+		scale = MIN((double)(columns * win.cw) / MAX(1, face->max_advance_width),
+		            (double)win.ch / MAX(1, face->height));
+		if (scale >= 1)
+			return emoji[slot].font = face;
+		XftFontClose(xw.dpy, face);
+		size = MAX(1, floor(size * scale));
+	}
+	return NULL;
+}
+
 void
 xunloadfont(Font *f)
 {
@@ -1171,11 +1292,23 @@ xunloadfont(Font *f)
 	FcPatternDestroy(f->pattern);
 	if (f->set)
 		FcFontSetDestroy(f->set);
+	if (f->textset)
+		FcFontSetDestroy(f->textset);
+	f->set = f->textset = NULL;
 }
 
 void
 xunloadfonts(void)
 {
+	int i;
+
+	for (i = 0; i < LEN(emoji); i++) {
+		if (emoji[i].font)
+			XftFontClose(xw.dpy, emoji[i].font);
+		emoji[i].font = NULL;
+		emoji[i].loaded = 0;
+	}
+
 	/* Free the loaded fonts in the font cache.  */
 	while (frclen > 0)
 		XftFontClose(xw.dpy, frc[--frclen].font);
@@ -1368,6 +1501,7 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 	float winx = borderpx + x * win.cw, winy = borderpx + y * win.ch, xp, yp;
 	uint32_t mode, prevmode = UINT32_MAX;
 	Font *font = &dc.font;
+	XftFont *emoji_face;
 	int frcflags = FRC_NORMAL;
 	float runewidth = win.cw;
 	Rune rune;
@@ -1376,6 +1510,7 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 	FcPattern *fcpattern, *fontpattern;
 	FcFontSet *fcsets[] = { NULL };
 	FcCharSet *fccharset;
+	FcBool color;
 	int i, f, numspecs = 0;
 
 	for (i = 0, xp = winx, yp = winy + font->ascent; i < len; ++i) {
@@ -1404,7 +1539,28 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 				font = &dc.bfont;
 				frcflags = FRC_BOLD;
 			}
+			if (!EMOJIPRES(mode))
+				frcflags |= FRC_TEXT;
 			yp = winy + font->ascent;
+		}
+
+		/*
+		 * Color emoji override existing text glyphs for emoji presentation:
+		 * wide characters unless followed by U+FE0E, and narrow ones
+		 * followed by U+FE0F.  ASCII text is never overridden.
+		 */
+		if (rune >= 0xA9 && rune != 0x200D && EMOJIPRES(mode) &&
+		    !BETWEEN(rune, 0xFE00, 0xFE0F) && !BETWEEN(rune, 0xE0020, 0xE007F) &&
+		    (emoji_face = xloademojifont((mode & ATTR_WIDE) ? 2 : 1)) &&
+		    (glyphidx = XftCharIndex(xw.dpy, emoji_face, rune))) {
+			specs[numspecs].font = emoji_face;
+			specs[numspecs].glyph = glyphidx;
+			specs[numspecs].x = xshort(xp);
+			specs[numspecs].y = xshort(winy + (win.ch - emoji_face->height) / 2 +
+			                               emoji_face->ascent);
+			xp += runewidth;
+			numspecs++;
+			continue;
 		}
 
 		/* Lookup character index with default font. */
@@ -1421,6 +1577,9 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 
 		/* Fallback on font cache, search the font cache for match. */
 		for (f = 0; f < frclen; f++) {
+			/* Other characters may have a non-color fallback to find. */
+			if ((frcflags & FRC_TEXT) && frc[f].color && frc[f].unicodep != rune)
+				continue;
 			glyphidx = XftCharIndex(xw.dpy, frc[f].font, rune);
 			/* Everything correct. */
 			if (glyphidx && frc[f].flags == frcflags)
@@ -1458,8 +1617,8 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 					FcMatchPattern);
 			FcDefaultSubstitute(fcpattern);
 
-			fontpattern = FcFontSetMatch(0, fcsets, 1,
-					fcpattern, &fcres);
+			fontpattern = xfallbackmatch(font, fcsets, fcpattern, rune,
+			                             frcflags & FRC_TEXT);
 
 			/* Allocate memory for the new cache entry. */
 			if (frclen >= frccap) {
@@ -1467,6 +1626,9 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 				frc = xrealloc(frc, frccap * sizeof(Fontcache));
 			}
 
+			frc[frclen].color = fontpattern &&
+				FcPatternGetBool(fontpattern, FC_COLOR, 0, &color) ==
+				FcResultMatch && color;
 			frc[frclen].font = XftFontOpenPattern(xw.dpy,
 					fontpattern);
 			if (!frc[frclen].font)
@@ -2070,7 +2232,8 @@ xdrawcursor(int cx, int cy, Glyph g, int ox, int oy, Glyph og)
 	/*
 	 * Select the right color for the right mode.
 	 */
-	g.mode &= ATTR_BOLD|ATTR_ITALIC|ATTR_UNDERLINE|ATTR_USTYLE|ATTR_STRUCK|ATTR_WIDE;
+	g.mode &= ATTR_BOLD|ATTR_ITALIC|ATTR_UNDERLINE|ATTR_USTYLE|ATTR_STRUCK|ATTR_WIDE|
+	          ATTR_ALTPRES;
 
 	if (IS_SET(MODE_REVERSE)) {
 		g.mode |= ATTR_REVERSE;

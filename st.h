@@ -22,6 +22,8 @@
 /* Outside the 25-bit indexed/truecolor range, fitting Glyph.ucolor. */
 #define UCOLOR_DEFAULT ((1U << 26) - 1)
 #define USTYLE(g) (((g).mode & ATTR_USTYLE) >> 13)
+/* Wide cells default to emoji presentation, narrow ones to text. */
+#define EMOJIPRES(m) (!((m) & ATTR_WIDE) != !((m) & ATTR_ALTPRES))
 
 enum glyph_attribute {
 	ATTR_NULL       = 0,
@@ -36,6 +38,7 @@ enum glyph_attribute {
 	ATTR_WRAP       = 1 << 8,
 	ATTR_WIDE       = 1 << 9,
 	ATTR_WDUMMY     = 1 << 10,
+	ATTR_ALTPRES    = 1 << 11, /* U+FE0E/U+FE0F flipped the width's default */
 	ATTR_URL        = 1 << 12,
 	ATTR_USTYLE     = 7 << 13,
 	ATTR_WPAD       = 1 << 16, /* padding before a wide glyph on the next row */
