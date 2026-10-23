@@ -5,13 +5,13 @@
  *
  * font: see http://freedesktop.org/software/fontconfig/fontconfig-user.html
  */
-static char *font = "Liberation Mono:pixelsize=12:antialias=true:autohint=true";
+static char *font = "Liberation Mono:pixelsize=13:antialias=true:autohint=true";
 /*
  * Prefer this color font for emoji presentation: wide emoji unless followed
  * by U+FE0E, and narrow characters followed by U+FE0F.  NULL disables it.
  */
 static char *emojifont = "Noto Color Emoji";
-static int borderpx = 2;
+static int borderpx = 0;
 
 /*
  * Program selection, in order of precedence:
@@ -21,7 +21,7 @@ static int borderpx = 2;
  * 4: shell from /etc/passwd
  * 5: shell configured below
  */
-static char *shell = "/bin/sh";
+static char *shell = "/usr/bin/bash";
 char *utmp = NULL;
 /* scroll program: to enable use a string like "scroll" */
 char *scroll = NULL;
@@ -141,32 +141,32 @@ unsigned int tabspaces = 8; /* must be > 0 */
 /* Terminal colors (16 first used in escape sequence) */
 static const char *colorname[] = {
 	/* 8 normal colors */
-	"black",
-	"red3",
-	"green3",
-	"yellow3",
-	"blue2",
-	"magenta3",
-	"cyan3",
-	"gray90",
+	"#000000",
+	"#cc0000",
+	"#4e9a06",
+	"#c4a000",
+	"#3465a4",
+	"#75507b",
+	"#06989a",
+	"#d3d7cf",
 
 	/* 8 bright colors */
-	"gray50",
-	"red",
-	"green",
-	"yellow",
-	"#5c5cff",
-	"magenta",
-	"cyan",
-	"white",
+	"#555753",
+	"#ef2929",
+	"#8ae234",
+	"#fce94f",
+	"#729fcf",
+	"#ad7fa8",
+	"#34e2e2",
+	"#ecedee",
 
 	[255] = 0,
 
 	/* more colors can be added after 255 to use with DefaultXX */
-	"#cccccc",
+	"#00cc00", /* cursor */
 	"#555555",
-	"gray90", /* default foreground colour */
-	"black", /* default background colour */
+	"#cbcbcb", /* default foreground colour */
+	"#00002c", /* default background colour */
 };
 
 
@@ -245,9 +245,10 @@ static Shortcut shortcuts[] = {
 	{ XK_ANY_MOD,           XK_Print,       printsel,       {.i =  0} },
 	{ ShiftMask,            XK_Prior,       kscrollup,      {.i = -1} },
 	{ ShiftMask,            XK_Next,        kscrolldown,    {.i = -1} },
-	{ TERMMOD,              XK_Prior,       zoom,           {.f = +1} },
-	{ TERMMOD,              XK_Next,        zoom,           {.f = -1} },
-	{ TERMMOD,              XK_Home,        zoomreset,      {.f =  0} },
+	{ ControlMask,          XK_plus,        zoom,           {.f = +1} },
+	{ ControlMask|ShiftMask, XK_plus,       zoom,           {.f = +1} },
+	{ ControlMask,          XK_minus,       zoom,           {.f = -1} },
+	{ ControlMask,          XK_0,           zoomreset,      {.f =  0} },
 	{ TERMMOD,              XK_C,           clipcopy,       {.i =  0} },
 	{ TERMMOD,              XK_V,           clippaste,      {.i =  0} },
 	{ TERMMOD,              XK_Y,           selpaste,       {.i =  0} },

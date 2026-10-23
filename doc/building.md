@@ -69,3 +69,29 @@ Building requires a C compiler and development files for Xlib, Xft, XRender,
 Fontconfig and FreeType. `pkg-config` supplies Fontconfig and FreeType
 flags. XRender supplies the visual-bell overlay; desktop transparency and a
 compositing window manager are not required.
+
+## Default settings
+
+The default font is Liberation Mono at 13 pixels with antialiasing and
+autohinting, with no window padding. The configured shell fallback is
+`/usr/bin/bash`; an explicit `-e` command, configured scroll/utmp wrapper,
+`SHELL` environment variable or passwd shell takes precedence according to
+the rules in `config.def.h`.
+
+Normal and bright ANSI colors follow the Tango palette, except for pure
+black (`#000000`) and a bright white of `#ecedee`. The cursor is green
+(`#00cc00`), foreground `#cbcbcb` and background `#00002c`. Bold still maps
+normal ANSI colors to their bright counterparts.
+
+| Shortcut | Action |
+| --- | --- |
+| Ctrl+Plus or Ctrl+Shift+Plus | Zoom in |
+| Ctrl+Minus | Zoom out |
+| Ctrl+0 | Reset zoom |
+| Shift+PageUp / Shift+PageDown | Scroll history |
+
+These zoom keys replace Ctrl+Shift+PageUp, Ctrl+Shift+PageDown and
+Ctrl+Shift+Home. Regenerate `config.h` and rebuild to adopt the defaults.
+Cursor, underline, emoji and bell behavior are described in
+[appearance](appearance.md); [scrollback](scrollback.md) explains history
+navigation and resizing.
