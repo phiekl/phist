@@ -22,6 +22,7 @@
 
 #include "st.h"
 #include "win.h"
+#include "compose.h"
 
 #if   defined(__linux)
  #include <pty.h>
@@ -202,7 +203,10 @@ static void tmoveato(int, int);
 static void tnewline(int);
 static void tputtab(int);
 static void tputc(Rune);
+static Glyph *tprevcell(void);
 static void tpresentation(int);
+static Rune compose(Rune, Rune);
+static void tcombine(Rune);
 static void treset(void);
 static void tscrollup(int, int, int);
 static void tscrolldown(int, int);
@@ -3642,22 +3646,89 @@ eschandle(uchar ascii)
 	return 1;
 }
 
-static void
-tpresentation(int emoji)
+/* The cell last printed to, or NULL at the start of a line. */
+static Glyph *
+tprevcell(void)
 {
 	int x = term.c.x;
-	Glyph *gp;
 
 	if (!(term.c.state & CURSOR_WRAPNEXT)) {
 		if (x == 0)
-			return;
+			return NULL;
 		x--;
 	}
 	if (term.line[term.c.y][x].mode & ATTR_WDUMMY && x > 0)
 		x--;
-	gp = &term.line[term.c.y][x];
+	return &term.line[term.c.y][x];
+}
+
+static void
+tpresentation(int emoji)
+{
+	Glyph *gp;
+
+	if (!(gp = tprevcell()))
+		return;
 	MODBIT(gp->mode, emoji != !!(gp->mode & ATTR_WIDE), ATTR_ALTPRES);
 	tdirtyscreen(term.c.y, term.c.y);
+}
+
+/* The precomposed form of base followed by mark, or 0 if there is none. */
+static Rune
+compose(Rune base, Rune mark)
+{
+	enum { SBASE = 0xAC00, LBASE = 0x1100, VBASE = 0x1161, TBASE = 0x11A7,
+	       LCOUNT = 19, VCOUNT = 21, TCOUNT = 28, NCOUNT = VCOUNT * TCOUNT };
+	size_t lo = 0, hi = LEN(composetbl), mid;
+
+	/* Hangul jamo combine arithmetically: L+V gives LV, LV+T gives LVT. */
+	if (BETWEEN(base, LBASE, LBASE + LCOUNT - 1) &&
+	    BETWEEN(mark, VBASE, VBASE + VCOUNT - 1))
+		return SBASE + ((base - LBASE) * VCOUNT + mark - VBASE) * TCOUNT;
+	if (BETWEEN(base, SBASE, SBASE + LCOUNT * NCOUNT - 1) &&
+	    (base - SBASE) % TCOUNT == 0 &&
+	    BETWEEN(mark, TBASE + 1, TBASE + TCOUNT - 1))
+		return base + mark - TBASE;
+
+	while (lo < hi) {
+		mid = (lo + hi) / 2;
+		if (composetbl[mid].base < base || (composetbl[mid].base == base &&
+		    composetbl[mid].mark < mark))
+			lo = mid + 1;
+		else
+			hi = mid;
+	}
+	if (lo < LEN(composetbl) && composetbl[lo].base == base &&
+	    composetbl[lo].mark == mark)
+		return composetbl[lo].comp;
+	return 0;
+}
+
+/*
+ * Cells hold one character, so a zero width character is merged into the
+ * previous cell when a precomposed form of the same width exists, and is
+ * dropped otherwise.
+ */
+static void
+tcombine(Rune u)
+{
+	Glyph *gp;
+	Rune c;
+	int x, wide;
+
+	if (!(gp = tprevcell()))
+		return;
+	wide = (gp->mode & ATTR_WIDE) != 0;
+	if (!(c = compose(gp->u, u)) || wcwidth(c) != (wide ? 2 : 1))
+		return;
+	x = gp - term.line[term.c.y];
+	if (selected(x, screenrow(term.c.y)) ||
+	    (wide && selected(x + 1, screenrow(term.c.y))))
+		selclear();
+	gp->u = c;
+	term.lastc = c;
+	tdirtyscreen(term.c.y, term.c.y);
+	urls.dirty = 1;
 }
 
 void
@@ -3769,6 +3840,10 @@ check_control_code:
 	/* Variation selectors choose the presentation of the previous character. */
 	if (BETWEEN(u, 0xFE0E, 0xFE0F) && IS_SET(MODE_UTF8)) {
 		tpresentation(u == 0xFE0F);
+		return;
+	}
+	if (width == 0) {
+		tcombine(u);
 		return;
 	}
 

@@ -166,3 +166,22 @@ effects, custom colors, geometry, alpha blending, clean redraws, deadlines,
 repeated bells, expiry, resize and tiny windows. Test-owned colors keep
 checks independent of configured defaults. Expose handling also verifies
 that a pending resize is applied only once.
+
+## Combining characters
+
+A cell stores one Unicode character. A zero-width character is merged into
+the previously printed cell when a canonical precomposed character of the
+same width exists. This preserves accents that would otherwise be
+overwritten by the next character. Sequences of marks and Hangul jamo
+compose where possible; marks without a suitable composition are dropped.
+This is not general combining-mark rendering or shaping.
+
+Composition updates copied text and REP (repeat the preceding character). It
+shares previous-cell lookup with variation selectors. Changing a selected
+base, or either half of a selected wide cell, clears the selection; dropped
+marks and changes elsewhere leave it intact.
+
+`compose.h` contains Unicode 15.1.0 canonical compositions and is included
+in build dependencies and source distributions. Run `LC_ALL=C.UTF-8 sh
+tests/combining.sh` for composition, cursor boundaries, wide bases, REP and
+selection checks.
