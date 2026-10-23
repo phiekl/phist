@@ -76,7 +76,7 @@ Cells remain 16 bytes, checked at compile time: Unicode uses 21 bits,
 attributes 18, foreground and background 25 each, and underline color 26
 including a default-color sentinel. Three attribute bits hold underline
 style. At 16 bytes a cell, 65,536 full 200-column history rows take about
-200 MiB.
+200 MiB uncompressed.
 
 The renderer creates one underline GC lazily and caches up to 16 RGB
 underline colors. Eviction frees the old allocation; reloading the palette

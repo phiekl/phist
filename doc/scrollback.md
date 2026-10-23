@@ -113,3 +113,33 @@ Run `LC_ALL=C.UTF-8 sh tests/clear.sh` and `LC_ALL=C.UTF-8 sh
 tests/colors.sh`. Checks cover small limits, wrapped URLs, underline
 attributes, margins and erase modes, including underline round trips through
 full-screen clearing.
+
+## Compressed rows
+
+Stored history separates Unicode text from runs of identical formatting, in
+one allocation per row. Uniformly styled output no longer repeats a full
+cell's attributes for every character. Each run is 16 bytes, matching the
+cell attribute bit widths, with a 21-bit end offset. Rows fall back to raw
+cells if encoding would cost more or their width exceeds that offset. The
+65,536-row retention default is unchanged.
+
+Rows decode for display, selection, screen restoration and resize reflow.
+Word snapping reuses a decoded row, fetching its length and successor at row
+boundaries rather than decoding it for every selected cell.
+
+Run `LC_ALL=C.UTF-8 sh tests/history-storage.sh` for randomized codec,
+clipping/padding, full-capacity storage and eviction checks. To compare
+storage and core processing costs:
+
+```sh
+sh tests/history-bench.sh . plain
+sh tests/history-bench.sh . colored
+sh tests/history-bench.sh . varied
+sh tests/history-bench.sh /path/to/older/source plain
+```
+
+The benchmark reports load time, peak resident memory, 10,000 scrolls and a
+resize pair. It exercises parsing/history and URL scans headlessly,
+excluding X rendering. The optional source tree lets the same workload
+measure an older implementation; results depend on machine and workload,
+especially how often formatting changes.

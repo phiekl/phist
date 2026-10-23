@@ -6,7 +6,7 @@ phist is an X11 terminal emulator forked from [st](https://st.suckless.org/).
 
 - [Custom font, palette, shell and zoom
   defaults](doc/building.md#default-settings), with local build configuration.
-- [Scrollback with resize reflow, page keys and preserved
+- [Compressed scrollback with resize reflow, page keys and preserved
   clears](doc/scrollback.md).
 - [Consistent Delete keys](doc/input.md#delete-key) and automatic replies that
   preserve the history view.

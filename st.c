@@ -278,10 +278,23 @@ static const uchar utfmask[UTF_SIZ + 1] = {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
 static const Rune utfmin[UTF_SIZ + 1] = {       0,    0,  0x80,  0x800,  0x10000};
 static const Rune utfmax[UTF_SIZ + 1] = {0x10FFFF, 0x7F, 0x7FF, 0xFFFF, 0x10FFFF};
 
-typedef struct
-{
-	Line cells;
+/* History keeps text separately from runs of identical cell attributes. */
+typedef struct {
+	uint64_t end : 21; /* exclusive cell offset; wider rows stay raw */
+	uint64_t mode : 18;
+	uint64_t fg : 25;
+	uint64_t bg : 25;
+	uint64_t ucolor : 26;
+	uint64_t : 13;
+} HistoryRun;
+
+/* A run must cost no more than a raw cell, or compact rows lose their benefit. */
+typedef char history_run_size[(sizeof(HistoryRun) <= sizeof(Glyph)) ? 1 : -1];
+
+typedef struct {
+	void *cells; /* raw Glyphs, or HistoryRun[runs] followed by Rune[cols] */
 	int cols;
+	int runs; /* zero selects raw cells when encoding would cost more */
 } HistoryLine;
 
 typedef struct
@@ -340,6 +353,72 @@ sb_storedwidth(const Glyph *line, int cols)
 	return MAX(1, sb_contentwidth(line, cols));
 }
 
+/* One allocation per row; unusually varied attributes fall back to raw cells. */
+static HistoryLine
+sb_pack(const Glyph *line, int cols)
+{
+	HistoryLine row = { .cols = cols };
+	HistoryRun *runs;
+	Rune *text;
+	size_t rawsize = (size_t)cols * sizeof(Glyph), size;
+	int x, n = 1, r = 0;
+
+	for (x = 1; x < cols; x++) {
+		if (ATTRCMP(line[x - 1], line[x]))
+			n++;
+		if ((size_t)cols * sizeof(Rune) + n * sizeof(HistoryRun) >= rawsize)
+			break;
+	}
+	size = (size_t)cols * sizeof(Rune) + n * sizeof(HistoryRun);
+	if (size >= rawsize || cols >= 1 << 21) {
+		row.cells = xmalloc(rawsize);
+		memcpy(row.cells, line, rawsize);
+		return row;
+	}
+	row.runs = n;
+	row.cells = runs = xmalloc(size);
+	text = (Rune *)(runs + n);
+	for (x = 0; x < cols; x++) {
+		text[x] = line[x].u;
+		if (!x || ATTRCMP(line[x - 1], line[x])) {
+			if (x)
+				runs[r++].end = x;
+			runs[r] = (HistoryRun){ .mode = line[x].mode,
+				.fg = line[x].fg, .bg = line[x].bg,
+				.ucolor = line[x].ucolor };
+		}
+	}
+	runs[r].end = cols;
+	return row;
+}
+
+/* Decode a prefix and recreate padding without changing the stored row. */
+static void
+sb_unpack(const HistoryLine *row, Line line, int cols)
+{
+	const HistoryRun *runs = row->cells;
+	const Rune *text = (const Rune *)(runs + row->runs);
+	Glyph attr;
+	int x = 0, r, end, stored = MIN(cols, row->cols);
+
+	if (!row->runs) {
+		memcpy(line, row->cells, (size_t)stored * sizeof(Glyph));
+		x = stored;
+	} else {
+		for (r = 0; x < stored; r++) {
+			attr = (Glyph){ .mode = runs[r].mode, .fg = runs[r].fg,
+				.bg = runs[r].bg, .ucolor = runs[r].ucolor };
+			end = MIN(stored, runs[r].end);
+			for (; x < end; x++) {
+				line[x] = attr;
+				line[x].u = text[x];
+			}
+		}
+	}
+	for (; x < cols; x++)
+		line[x] = sb_padglyph();
+}
+
 static void
 sb_init(int lines)
 {
@@ -380,7 +459,6 @@ sb_evict(Scrollback *history)
 static void
 sb_push(Line line)
 {
-	Line copy;
 	int tail;
 	int width, stored;
 
@@ -388,13 +466,11 @@ sb_push(Line line)
 		return;
 
 	stored = sb_storedwidth(line, term.col);
-	copy = xmalloc(stored * sizeof(Glyph));
-	memcpy(copy, line, stored * sizeof(Glyph));
 
 	if (sb.len == sb.limit)
 		sb_evict(&sb);
 	tail = sb_phys_index(sb.len);
-	sb.buf[tail] = (HistoryLine){ copy, stored };
+	sb.buf[tail] = sb_pack(line, stored);
 	sb.len++;
 	width = sb_contentwidth(line, term.col);
 	if (width > sb.max_width)
@@ -402,8 +478,8 @@ sb_push(Line line)
 }
 
 /*
- * Lines narrower than the screen are padded into scratch rows instead of
- * growing in place, so history storage stays trimmed.  A returned row is
+ * Compact or narrow rows are decoded/padded into scratch rows instead of
+ * growing in place, so history storage stays compact.  A returned row is
  * valid for the next LEN(scratch) - 1 calls, more than the few rows any
  * caller compares at once; it must not be written to.
  */
@@ -422,7 +498,7 @@ sb_get(int idx)
 	if (idx < 0 || idx >= sb.len)
 		return NULL;
 	line = &sb.buf[sb_phys_index(idx)];
-	if (line->cols >= term.col)
+	if (!line->runs && line->cols >= term.col)
 		return line->cells;
 	if (scratchcols != term.col) {
 		for (x = 0; x < LEN(scratch); x++) {
@@ -432,9 +508,7 @@ sb_get(int idx)
 		scratchcols = term.col;
 	}
 	row = scratch[next++ % LEN(scratch)];
-	memcpy(row, line->cells, line->cols * sizeof(Glyph));
-	for (x = line->cols; x < term.col; x++)
-		row[x] = sb_padglyph();
+	sb_unpack(line, row, term.col);
 	return row;
 }
 
@@ -526,14 +600,16 @@ sb_resize(int col, int rows, ReflowCursor *marks, int nmarks)
 	logical_cap = term.col * 2;
 	logical = xmalloc(logical_cap * sizeof(Glyph));
 	logical_len = 0;
+	line = xmalloc(term.col * sizeof(Glyph));
+	nl = xmalloc(col * sizeof(Glyph));
 
 	for (i = 0; i < sb.len; i++) {
 		/* Unwrap: Accumulate physical lines into one logical line. */
 		ROWVISIT();
 		source = &sb.buf[sb_phys_index(i)];
-		line = source->cells;
 		/* Only the stored cells are needed; wrapped lines are full width. */
 		stored = MIN(source->cols, term.col);
+		sb_unpack(source, line, stored);
 		is_wrapped = i + 1 < sb.len && stored == term.col &&
 		             (line[term.col - 1].mode & ATTR_WRAP);
 		if (logical_len + 2 * term.col > logical_cap) {
@@ -593,7 +669,6 @@ sb_resize(int col, int rows, ReflowCursor *marks, int nmarks)
 		/* Reflow: Pack whole glyphs into rows. */
 		cursor = 0;
 		while (cursor < logical_len && produced < screen_end) {
-			nl = xmalloc(col * sizeof(Glyph));
 			for (j = 0; j < col; j++)
 				nl[j] = sb_padglyph();
 
@@ -642,10 +717,8 @@ sb_resize(int col, int rows, ReflowCursor *marks, int nmarks)
 			if (next.len == next.limit)
 				sb_evict(&next);
 			stored = sb_storedwidth(nl, col);
-			if (stored < col)
-				nl = xrealloc(nl, stored * sizeof(Glyph));
 			tail = (next.head + next.len) % next.cap;
-			next.buf[tail] = (HistoryLine){ nl, stored };
+			next.buf[tail] = sb_pack(nl, stored);
 			next.len++;
 			if (cursor + copy_width < logical_len)
 				current_width = col;
@@ -658,6 +731,8 @@ sb_resize(int col, int rows, ReflowCursor *marks, int nmarks)
 		if (produced == screen_end)
 			break;
 	}
+	free(nl);
+	free(line);
 	free(logical);
 	sb_clear();
 	free(sb.buf);
@@ -672,7 +747,7 @@ sb_resize(int col, int rows, ReflowCursor *marks, int nmarks)
 static void
 sb_pop_screen(int start, int loaded, int new_cols)
 {
-	int i, p, x, n;
+	int i, p;
 
 	loaded = MIN(loaded, sb.len - start);
 	if (loaded > 0)
@@ -680,12 +755,8 @@ sb_pop_screen(int start, int loaded, int new_cols)
 	new_cols = MIN(new_cols, term.col);
 	for (i = 0; i < sb.len - start; i++) {
 		p = sb_phys_index(start + i);
-		if (i < loaded) {
-			n = MIN(new_cols, sb.buf[p].cols);
-			memcpy(term.line[i], sb.buf[p].cells, n * sizeof(Glyph));
-			for (x = n; x < new_cols; x++)
-				term.line[i][x] = sb_padglyph();
-		}
+		if (i < loaded)
+			sb_unpack(&sb.buf[p], term.line[i], new_cols);
 
 		free(sb.buf[p].cells);
 		sb.buf[p] = (HistoryLine){0};
@@ -1058,6 +1129,7 @@ sb_preserve_screen(void)
 {
 	int y, last = term.row - 1;
 	HistoryLine *hl;
+	Line line;
 	uint64_t oldstart = sb_view_start();
 
 	/* Avoid adding a screenful of empty rows after every clear. */
@@ -1068,7 +1140,12 @@ sb_preserve_screen(void)
 	/* A clear ends the old logical line, even if its last row was wrapped. */
 	if (last >= 0 && sb.len > 0) {
 		hl = &sb.buf[sb_phys_index(sb.len - 1)];
-		hl->cells[hl->cols - 1].mode &= ~ATTR_WRAP;
+		line = xmalloc(hl->cols * sizeof(Glyph));
+		sb_unpack(hl, line, hl->cols);
+		line[hl->cols - 1].mode &= ~ATTR_WRAP;
+		free(hl->cells);
+		*hl = sb_pack(line, hl->cols);
+		free(line);
 		urls.dirty = 1;
 	}
 
@@ -1541,10 +1618,10 @@ selregex(int *x, int *y, int direction)
 void
 selsnap(int *x, int *y, int direction)
 {
-	int newx, newy, xt, yt;
+	int newx, newy, len;
 	int delim, prevdelim;
 	const Glyph *gp, *prevgp;
-	Line line;
+	Line line, next;
 
 	if (sel.snap >= SNAP_REGEX) {
 		selregex(x, y, direction);
@@ -1557,7 +1634,10 @@ selsnap(int *x, int *y, int direction)
 		 * Snap around if the word wraps around at the end or
 		 * beginning of a line.
 		 */
-		prevgp = &renderline(*y)[*x];
+		/* History rows are decoded per call, so fetch each row only once. */
+		line = renderline(*y);
+		len = tlinelen(line);
+		prevgp = &line[*x];
 		prevdelim = ISDELIM(prevgp->u);
 		for (;;) {
 			newx = *x + direction;
@@ -1565,22 +1645,18 @@ selsnap(int *x, int *y, int direction)
 			if (!BETWEEN(newx, 0, term.col - 1)) {
 				newy += direction;
 				newx = (newx + term.col) % term.col;
-				if (!viewline(newy))
+				/* The wrap flag ends the upper of the two rows. */
+				if (!(next = viewline(newy)) ||
+				    !((direction > 0 ? line : next)[term.col - 1].mode & ATTR_WRAP))
 					break;
-
-				if (direction > 0)
-					yt = *y, xt = *x;
-				else
-					yt = newy, xt = newx;
-				line = renderline(yt);
-				if (!(line[xt].mode & ATTR_WRAP))
-					break;
+				line = next;
+				len = tlinelen(line);
 			}
 
-			if (newx >= tlinelen_render(newy))
+			if (newx >= len)
 				break;
 
-			gp = &renderline(newy)[newx];
+			gp = &line[newx];
 			delim = ISDELIM(gp->u);
 			if (!(gp->mode & (ATTR_WDUMMY | ATTR_WPAD)) && (delim != prevdelim
 					|| (delim && gp->u != prevgp->u)))
