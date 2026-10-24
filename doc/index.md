@@ -10,3 +10,4 @@ change. Settings live in `config.def.h` and take effect through `config.h`.
 - [Appearance and text rendering](appearance.md): Configure the cursor and the way terminal text is drawn.
 - [Clickable URLs](urls.md): Recognize, underline and copy URLs from the screen or history.
 - [Text selection and clipboard](selection.md): Select words, paths and logical lines, and copy text to other programs.
+- [Testing and fuzzing](testing.md): Run regression suites and stress the terminal core with reproducible input.
