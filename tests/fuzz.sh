@@ -7,9 +7,6 @@
 #	CC=gcc CFLAGS='-g -O1 -fsanitize=address,undefined \
 #	  -fsanitize-recover=address,signed-integer-overflow' \
 #	ASAN_OPTIONS=halt_on_error=0 sh tests/fuzz.sh
-# Note: sanitizer builds currently also flag the known upstream issues
-# (tdeftran() charset table read, INT_MIN CSI arithmetic); see fuzz.c.
-# These remain failures: suppressing those functions would hide new bugs too.
 set -eu
 cd "$(dirname "$0")/.."
 testdir=$(mktemp -d)

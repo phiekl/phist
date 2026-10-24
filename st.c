@@ -181,7 +181,7 @@ static int readcolonargs(char **, int, int[][CAR_PER_ARG]);
 static void csiparse(void);
 static void csireset(void);
 static void osc_color_response(int, int, int);
-static int eschandle(uchar);
+static int eschandle(Rune);
 static void strdump(void);
 static void strhandle(void);
 static void strparse(void);
@@ -218,10 +218,10 @@ static void tswapscreen(void);
 static void tsetmode(int, int, const int *, int);
 static int twrite(const char *, int, int);
 static void tcontrolcode(uchar );
-static void tdectest(char );
-static void tdefutf8(char);
+static void tdectest(Rune);
+static void tdefutf8(Rune);
 static int32_t tdefcolor(const int *, int *, int);
-static void tdeftran(char);
+static void tdeftran(Rune);
 static void tstrsequence(uchar);
 
 static void drawregion(int, int, int, int);
@@ -2423,8 +2423,11 @@ csiparse(void)
 		v = strtol(p, &np, 10);
 		if (np == p)
 			v = 0;
-		if (v == LONG_MAX || v == LONG_MIN)
-			v = -1;
+		/* Keep handler arithmetic like arg[0] - 1 or x + arg[0] in range. */
+		if (v < 0)
+			v = 0;
+		else if (v > 65535)
+			v = 65535;
 		csiescseq.arg[csiescseq.narg++] = v;
 		p = np;
 		csiescseq.cargc[csiescseq.narg - 1] =
@@ -3444,7 +3447,7 @@ tputtab(int n)
 }
 
 void
-tdefutf8(char ascii)
+tdefutf8(Rune ascii)
 {
 	if (ascii == 'G')
 		term.mode |= MODE_UTF8;
@@ -3453,14 +3456,18 @@ tdefutf8(char ascii)
 }
 
 void
-tdeftran(char ascii)
+tdeftran(Rune ascii)
 {
 	static char cs[] = "0B";
 	static int vcs[] = {CS_GRAPHIC0, CS_USA};
 	char *p;
 
-	if ((p = strchr(cs, ascii)) == NULL) {
-		fprintf(stderr, "esc unhandled charset: ESC ( %c\n", ascii);
+	/* strchr() also matches the terminator; wider runes must not truncate. */
+	if (!BETWEEN(ascii, 0x01, 0x7f) || (p = strchr(cs, ascii)) == NULL) {
+		if (BETWEEN(ascii, 0x20, 0x7e))
+			fprintf(stderr, "esc unhandled charset: ESC ( %c\n", (int)ascii);
+		else
+			fprintf(stderr, "esc unhandled charset: ESC ( U+%04X\n", (unsigned)ascii);
 	} else {
 		term.trantbl[term.icharset] = vcs[p - cs];
 	}
@@ -3502,7 +3509,7 @@ kscrollup(const Arg *arg)
 }
 
 void
-tdectest(char c)
+tdectest(Rune c)
 {
 	int x, y;
 
@@ -3638,7 +3645,7 @@ tcontrolcode(uchar ascii)
  * more characters for this sequence, otherwise 0
  */
 int
-eschandle(uchar ascii)
+eschandle(Rune ascii)
 {
 	switch (ascii) {
 	case '[':
@@ -3716,7 +3723,7 @@ eschandle(uchar ascii)
 		break;
 	default:
 		fprintf(stderr, "erresc: unknown sequence ESC 0x%02X '%c'\n",
-			(uchar) ascii, isprint(ascii)? ascii:'.');
+			(unsigned)ascii, BETWEEN(ascii, 0x20, 0x7e) ? (int)ascii : '.');
 		break;
 	}
 	return 1;
@@ -3886,7 +3893,8 @@ check_control_code:
 		return;
 	} else if (term.esc & ESC_START) {
 		if (term.esc & ESC_CSI) {
-			csiescseq.buf[csiescseq.len++] = u;
+			/* A non-ASCII rune must not truncate into a valid byte. */
+			csiescseq.buf[csiescseq.len++] = u < 0x80 ? u : 0xff;
 			if (BETWEEN(u, 0x40, 0x7E)
 					|| csiescseq.len >= \
 					sizeof(csiescseq.buf)-1) {
@@ -3961,7 +3969,7 @@ check_control_code:
 	if (width == 2) {
 		gp->mode |= ATTR_WIDE;
 		if (term.c.x+1 < term.col) {
-			if (gp[1].mode == ATTR_WIDE && term.c.x+2 < term.col) {
+			if ((gp[1].mode & ATTR_WIDE) && term.c.x+2 < term.col) {
 				gp[2].u = ' ';
 				gp[2].mode &= ~ATTR_WDUMMY;
 			}

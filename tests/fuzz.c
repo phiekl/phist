@@ -5,8 +5,8 @@
  *
  * Exercises malformed escapes and UTF-8, resizes, history, selections and URLs.
  * Check state bounds after each operation and wide/dummy pairs after each
- * episode. Pairing mismatches are warnings; known upstream wide-overwrite,
- * charset-table and CSI-overflow bugs can also produce sanitizer failures.
+ * episode. Pairing mismatches remain warnings because erase and insert
+ * operations can split wide cells.
  *
  * SIGALRM reports the current step and a stack trace before _exit().
  * Sanitizer findings, assertion failures and hangs fail the run.
@@ -363,8 +363,8 @@ pairwarn(const char *what, int x, int y)
 
 /*
  * Structural bounds must hold unconditionally (assert).  Wide/dummy
- * pairing is only warned about: the upstream tputc() code writes a
- * stray dummy when the displaced wide cell carries further attributes.
+ * pairing is only warned about: upstream erase and insert operations
+ * leave half of a wide glyph behind when they cover only the other half.
  */
 static void
 checkinvariants(int fullview)

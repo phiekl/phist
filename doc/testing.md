@@ -54,5 +54,7 @@ CC=gcc CFLAGS='-g -O1 -fsanitize=address,undefined -fsanitize-recover=address,si
 
 Sanitizer findings and abnormal exits fail the run; sanitizer summaries are
 preserved and failure filtering uses portable extended regexes. Wide/dummy
-mismatches are warnings, allowing known pairing problems to be investigated
-separately from bounds violations.
+mismatches from erase and insert operations remain warnings. The charset,
+wide-overwrite and CSI-overflow findings have been fixed; see [parser
+bounds](terminal-behavior.md#parser-bounds). Sanitizer reports for those
+cases are failures, not expected results.

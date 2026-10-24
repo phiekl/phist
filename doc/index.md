@@ -11,3 +11,4 @@ change. Settings live in `config.def.h` and take effect through `config.h`.
 - [Clickable URLs](urls.md): Recognize, underline and copy URLs from the screen or history.
 - [Text selection and clipboard](selection.md): Select words, paths and logical lines, and copy text to other programs.
 - [Testing and fuzzing](testing.md): Run regression suites and stress the terminal core with reproducible input.
+- [Terminal behavior and limits](terminal-behavior.md): How phist handles control sequences and bounds work triggered by application output.
