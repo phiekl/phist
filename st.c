@@ -250,6 +250,7 @@ static Selection sel;
 static CSIEscape csiescseq;
 static STREscape strescseq;
 static int iofd = 1;
+static int mcallowed; /* honor Media Copy only with an explicit -o */
 static int cmdfd;
 static pid_t pid;
 
@@ -1890,6 +1891,7 @@ ttynew(const char *line, char *cmd, const char *out, char **args, const char *di
 
 	if (out) {
 		term.mode |= MODE_PRINT;
+		mcallowed = 1;
 		iofd = (!strcmp(out, "-")) ?
 			  1 : open(out, O_WRONLY | O_CREAT, 0666);
 		if (iofd < 0) {
@@ -2930,6 +2932,9 @@ csihandle(void)
 		tmoveto(term.c.x, term.c.y+csiescseq.arg[0]);
 		break;
 	case 'i': /* MC -- Media Copy */
+		/* Without -o, iofd is phist's stdout, possibly another terminal. */
+		if (!mcallowed)
+			break;
 		switch (csiescseq.arg[0]) {
 		case 0:
 			tdump();

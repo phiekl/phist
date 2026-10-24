@@ -31,10 +31,16 @@ main(void)
 	dump_is("a\nb\nc\nd\n", NULL);
 	kscrollup(&step);
 	dump_is("historylong\na\nb\nc\n", NULL);
-	dump_is("d\n", "\033[1i");
+	/* Without -o, applications cannot print to phist's stdout. */
+	dump_is("", "\033[1i\033[0i\033[5ihidden\033[4i");
+	assert(!IS_SET(MODE_PRINT));
+	mcallowed = 1;
+	dump_is("dhidden\n", "\033[1i");
+	dump_is("x\033[4i", "\033[5ix\033[4i");
+	mcallowed = 0;
 	reset(20, 3);
 	put("\344\270\255\r\n\r\nx");
 	dump_is("\344\270\255\n\nx\n", NULL);
-	puts("PASS: print-screen uses displayed history, blank rows and wide UTF-8 glyphs");
+	puts("PASS: print-screen uses displayed history, blank rows and wide UTF-8 glyphs; Media Copy needs -o");
 	return 0;
 }
