@@ -8,7 +8,9 @@ static int allocations, frees, failalloc, fills;
 static int contexts, freedcontexts;
 static unsigned long stroke;
 static unsigned long painted[2100];
+static unsigned long backgrounds[2100];
 static int recordglyphs;
+static Color glyphcolor, backgroundcolor;
 
 Line testrender_text(int, const char *);
 
@@ -25,7 +27,19 @@ XftColorAllocValue(Display *d, Visual *v, Colormap m, const XRenderColor *value,
 }
 
 void XftColorFree(Display *d, Visual *v, Colormap m, XftColor *color) { frees++; }
-void XftDrawRect(XftDraw *d, const XftColor *c, int x, int y, unsigned int w, unsigned int h) {}
+void
+XftDrawRect(XftDraw *d, const XftColor *c, int x, int y, unsigned int w, unsigned int h)
+{
+	int i;
+
+	if (h == win.ch) {
+		backgroundcolor = *c;
+		if (recordglyphs)
+			for (i = MAX(0, (x - borderpx) / win.cw);
+			     i < MIN(LEN(backgrounds), (x - borderpx + w) / win.cw); i++)
+				backgrounds[i] = c->pixel;
+	}
+}
 Bool XftDrawSetClipRectangles(XftDraw *d, int x, int y, const XRectangle *r, int n) { return 1; }
 Bool XftDrawSetClip(XftDraw *d, Region r) { return 1; }
 void
@@ -33,6 +47,7 @@ XftDrawGlyphFontSpec(XftDraw *d, const XftColor *c, const XftGlyphFontSpec *s, i
 {
 	int i, col;
 
+	glyphcolor = *c;
 	if (!recordglyphs)
 		return;
 	for (i = 0; i < n; i++) {
@@ -143,6 +158,173 @@ testlongunderline(XftGlyphFontSpec *spec, Glyph base)
 	win.ch = ch;
 }
 
+static void
+setcolor(Color *color, unsigned int rgb)
+{
+	color->pixel = rgb;
+	color->color = (XRenderColor) { .red = ((rgb >> 16) & 255) * 257,
+		.green = ((rgb >> 8) & 255) * 257, .blue = (rgb & 255) * 257,
+		.alpha = 0xffff };
+}
+
+static void
+testvisibility(void)
+{
+	Glyph base = { .u = 'X', .fg = 1, .bg = 2, .ucolor = UCOLOR_DEFAULT };
+	XftGlyphFontSpec spec = {0};
+	Line line;
+	int before, i;
+	char *copy;
+
+	assert(revealhidden == 1 && mincontrast == 3.0);
+	failalloc = 0;
+	recordglyphs = 0;
+	win.mode = 0;
+	setcolor(&dc.col[1], 0x101010);
+	setcolor(&dc.col[2], 0x111111);
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(glyphcolor.pixel == 0xffffff && backgroundcolor.pixel == 0x111111);
+	/* Different indices can resolve to exactly the same RGB value. */
+	setcolor(&dc.col[1], 0xffffff);
+	setcolor(&dc.col[2], 0xffffff);
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(glyphcolor.pixel == 0 && backgroundcolor.pixel == 0xffffff);
+	/* Legible colors remain unchanged, including after reversal. */
+	setcolor(&dc.col[1], 0xeeeeee);
+	setcolor(&dc.col[2], 0x111111);
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(glyphcolor.pixel == 0xeeeeee && backgroundcolor.pixel == 0x111111);
+	base.mode = ATTR_REVERSE;
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(glyphcolor.pixel == 0x111111 && backgroundcolor.pixel == 0xeeeeee);
+	/* Faint and reverse video are applied before the contrast check. */
+	base.mode = ATTR_FAINT;
+	setcolor(&dc.col[1], 0x888888);
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(glyphcolor.pixel == 0xffffff);
+	base.mode = ATTR_REVERSE;
+	setcolor(&dc.col[1], 0xeeeeee);
+	setcolor(&dc.col[2], 0xefefef);
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(glyphcolor.pixel == 0 && backgroundcolor.pixel == 0xeeeeee);
+	base.mode = 0;
+	win.mode = MODE_REVERSE;
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(glyphcolor.pixel == 0xffffff && backgroundcolor.pixel == 0x101010);
+	win.mode = 0;
+	/* RGB colors and backgrounds retain their exact original values. */
+	base.fg = TRUECOLOR(20, 21, 22);
+	base.bg = TRUECOLOR(21, 22, 23);
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(glyphcolor.pixel == 0xffffff && backgroundcolor.pixel == 0x141516);
+	mincontrast = 0;
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(glyphcolor.pixel == 0x131415 && backgroundcolor.pixel == 0x141516);
+	mincontrast = 3;
+	/* Concealment gets a fixed warning background, even while blinking. */
+	base.mode = ATTR_INVISIBLE | ATTR_BLINK | ATTR_FAINT | ATTR_REVERSE |
+	            ATTR_UNDERLINE | (1 << 13);
+	base.ucolor = TRUECOLOR(1, 2, 3);
+	win.mode = MODE_BLINK | MODE_REVERSE;
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(glyphcolor.pixel == 0x990000 && backgroundcolor.pixel == 0xffffff);
+	assert(stroke == 0x990000);
+	base.mode ^= ATTR_REVERSE;
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(glyphcolor.pixel == 0xffffff && backgroundcolor.pixel == 0x990000);
+	assert(stroke == 0xffffff);
+	/* Neither OSC palette changes nor repeated drawing alter the marker. */
+	win.mode = MODE_BLINK;
+	before = allocations;
+	for (i = 0; i < 100; i++) {
+		setcolor(&dc.col[1], i);
+		setcolor(&dc.col[2], i);
+		base.fg = 1;
+		base.bg = 2;
+		base.mode = ATTR_INVISIBLE;
+		xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+		assert(glyphcolor.pixel == 0xffffff && backgroundcolor.pixel == 0x990000);
+	}
+	assert(allocations == before);
+	revealhidden = 0;
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(glyphcolor.pixel == backgroundcolor.pixel);
+	revealhidden = 1;
+	/* Ordinary blinking still has an invisible phase. */
+	base.mode = ATTR_BLINK;
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(glyphcolor.pixel == backgroundcolor.pixel);
+	win.mode = 0;
+	/* Exercise escape parsing, mixed runs, leading spaces and copying. */
+	line = testrender_text(8, "\033[8mhide\033[28m\033[30;40m X");
+	xw.specbuf = xmalloc(8 * sizeof(*xw.specbuf));
+	recordglyphs = 1;
+	xdrawline(line, 0, 0, 8);
+	assert(painted[0] == 0xffffff && painted[3] == 0xffffff);
+	assert(painted[5] == 0xffffff);
+	assert(backgrounds[0] == 0x990000 && backgrounds[3] == 0x990000);
+	assert(backgrounds[4] == 0 && backgrounds[5] == 0);
+	assert(line[0].mode & ATTR_INVISIBLE);
+	assert(!(line[4].mode & ATTR_INVISIBLE));
+	assert(line[5].fg == 0 && line[5].bg == 0);
+	/* Partial selection must reverse only the selected concealed cells. */
+	selstart(1, 0, 0);
+	selextend(2, 0, SEL_REGULAR, 0);
+	selextend(2, 0, SEL_REGULAR, 1);
+	xdrawline(line, 0, 0, 8);
+	assert(painted[0] == 0xffffff && backgrounds[0] == 0x990000);
+	assert(painted[1] == 0x990000 && backgrounds[1] == 0xffffff);
+	assert(painted[2] == 0x990000 && backgrounds[2] == 0xffffff);
+	assert(painted[3] == 0xffffff && backgrounds[3] == 0x990000);
+	selclear();
+	xdrawline(line, 0, 0, 8);
+	assert(painted[1] == 0xffffff && backgrounds[1] == 0x990000);
+	selstart(0, 0, 0);
+	selextend(5, 0, SEL_REGULAR, 0);
+	selextend(5, 0, SEL_REGULAR, 1);
+	copy = getsel();
+	assert(copy && !strcmp(copy, "hide X"));
+	free(copy);
+	selclear();
+	free(xw.specbuf);
+	xw.specbuf = NULL;
+	recordglyphs = 0;
+	puts("PASS: concealed text warnings, selection feedback, minimum contrast, RGB/palette colors, faint/reverse/blink, opt-outs and unchanged copying");
+}
+
+static void
+testconcealedurl(void)
+{
+	const char *url = "https://example.com";
+	Line line = testrender_text(32, "\033[8mhttps://example.com\033[0m plain");
+	int i, reverse, urllen = strlen(url);
+
+	xw.specbuf = xmalloc(32 * sizeof(*xw.specbuf));
+	recordglyphs = 1;
+	for (reverse = 0; reverse <= 1; reverse++) {
+		for (i = 0; i < urllen; i++)
+			MODBIT(line[i].mode, reverse, ATTR_REVERSE);
+		xdrawline(line, 0, 0, 32);
+		assert(painted[0] == (reverse ? 0x990000 : 0xffffff));
+		assert(backgrounds[0] == (reverse ? 0xffffff : 0x990000));
+		tflashurl(0, 0, url);
+		xdrawline(line, 0, 0, 32);
+		for (i = 0; i < urllen; i++) {
+			assert(painted[i] == (reverse ? 0xffffff : 0x990000));
+			assert(backgrounds[i] == (reverse ? 0x990000 : 0xffffff));
+		}
+		assert(backgrounds[urllen] == dc.col[defaultbg].pixel);
+		tclearurlflash();
+		xdrawline(line, 0, 0, 32);
+		assert(painted[0] == (reverse ? 0x990000 : 0xffffff));
+		assert(backgrounds[0] == (reverse ? 0xffffff : 0x990000));
+	}
+	free(xw.specbuf);
+	xw.specbuf = NULL;
+	recordglyphs = 0;
+	puts("PASS: concealed URLs flash and restore, including reverse-video URLs");
+}
+
 int
 main(void)
 {
@@ -152,8 +334,8 @@ main(void)
 	int i;
 
 	dc.col = colors;
-	colors[1].pixel = 0xabcdef;
-	colors[2].pixel = 0x654321;
+	setcolor(&colors[1], 0xabcdef);
+	setcolor(&colors[2], 0x654321);
 	dc.font.ascent = 10;
 	dc.font.descent = 3;
 	win.w = win.tw = 800;
@@ -197,8 +379,8 @@ main(void)
 		win.w = win.tw = LEN(painted) * win.cw;
 		win.h = win.th = win.ch;
 		xw.specbuf = xmalloc(LEN(painted) * sizeof(*xw.specbuf));
-		colors[defaultfg].pixel = 0x123456;
-		colors[defaultbg].pixel = 0x654321;
+		setcolor(&colors[defaultfg], 0xeeeeee);
+		setcolor(&colors[defaultbg], 0x222222);
 		recordglyphs = 1;
 		tflashurl(2048, 0, second);
 		xdrawline(line, 0, 0, LEN(painted));
@@ -212,6 +394,8 @@ main(void)
 		free(xw.specbuf);
 	}
 	puts("PASS: underline styles, RGB cache reuse/eviction, fallback, balanced frees and a reused GC");
+	testvisibility();
+	testconcealedurl();
 	testundercurl();
 	return 0;
 }

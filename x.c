@@ -437,6 +437,15 @@ selpaste(const Arg *dummy)
 			xw.win, CurrentTime);
 }
 
+/* Cache a successful allocation; use the fallback and retry after failure. */
+static Color *
+xlazycolor(Color *color, int *loaded, const XRenderColor *value, Color *fallback)
+{
+	if (!*loaded)
+		*loaded = XftColorAllocValue(xw.dpy, xw.vis, xw.cmap, value, color);
+	return *loaded ? color : fallback;
+}
+
 void
 numlock(const Arg *dummy)
 {
@@ -1733,6 +1742,58 @@ static int getSlope (int x, int iPoint, int waveWidth)
 	return pointType;
 }
 
+/* Fixed colors cannot be hidden by application palette changes (OSC 4/10/11). */
+enum { VISIBLE_BLACK, VISIBLE_WHITE, VISIBLE_RED };
+
+static Color *
+xvisibilitycolor(int index)
+{
+	static Color colors[3];
+	static int loaded[3];
+	static const int nearest[] = { 0, 15, 1 }; /* black, white and red */
+	XRenderColor values[] = {
+		{ .alpha = 0xffff },
+		{ .red = 0xffff, .green = 0xffff, .blue = 0xffff, .alpha = 0xffff },
+		{ .red = 0x9999, .alpha = 0xffff },
+	};
+
+	return xlazycolor(&colors[index], &loaded[index], &values[index],
+	                  &dc.col[nearest[index]]);
+}
+
+static double
+xlinearcolor(ushort channel)
+{
+	double value = channel / 65535.0;
+
+	return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4);
+}
+
+static double
+xluminance(const Color *color)
+{
+	return 0.2126 * xlinearcolor(color->color.red) +
+	       0.7152 * xlinearcolor(color->color.green) +
+	       0.0722 * xlinearcolor(color->color.blue);
+}
+
+static Color *
+xvisibleforeground(Color *fg, Color *bg)
+{
+	double light, dark, background;
+
+	if (mincontrast <= 1)
+		return fg;
+	background = xluminance(bg) + 0.05;
+	light = xluminance(fg) + 0.05;
+	dark = MIN(light, background);
+	light = MAX(light, background);
+	if (light / dark >= mincontrast)
+		return fg;
+	return xvisibilitycolor(background / 0.05 >= 1.05 / background ?
+	                        VISIBLE_BLACK : VISIBLE_WHITE);
+}
+
 void
 xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, int y)
 {
@@ -1823,11 +1884,19 @@ xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, i
 		bg = temp;
 	}
 
-	if (base.mode & ATTR_BLINK && win.mode & MODE_BLINK)
-		fg = bg;
-
-	if (base.mode & ATTR_INVISIBLE)
-		fg = bg;
+	if (revealhidden && (base.mode & ATTR_INVISIBLE)) {
+		/* Selection and URL flashes toggle reverse video. */
+		fg = xvisibilitycolor(base.mode & ATTR_REVERSE ?
+		                      VISIBLE_RED : VISIBLE_WHITE);
+		bg = xvisibilitycolor(base.mode & ATTR_REVERSE ?
+		                      VISIBLE_WHITE : VISIBLE_RED);
+	} else {
+		fg = xvisibleforeground(fg, bg);
+		/* Preserve ordinary blinking and the opt-out for concealed text. */
+		if ((base.mode & ATTR_BLINK && win.mode & MODE_BLINK) ||
+		    (base.mode & ATTR_INVISIBLE))
+			fg = bg;
+	}
 
 	/* Intelligent cleaning up of the borders. */
 	if (x == 0) {

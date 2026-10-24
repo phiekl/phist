@@ -185,3 +185,26 @@ marks and changes elsewhere leave it intact.
 in build dependencies and source distributions. Run `LC_ALL=C.UTF-8 sh
 tests/combining.sh` for composition, cursor boundaries, wide bases, REP and
 selection checks.
+
+## Concealed and low-contrast text
+
+`revealhidden = 1` makes SGR 8 (concealed) text visible as white on dark
+red. Fixed warning colors are independent of application palette changes.
+Concealed text remains visible while blinking, and reverse video swaps the
+warning colors so selections and URL-copy flashes remain apparent.
+
+`mincontrast = 3.0` replaces a glyph foreground below a 3:1 contrast ratio
+with whichever of black or white contrasts better against its background.
+The check uses resolved palette or RGB colors after faint and reverse
+attributes. It preserves backgrounds, including spaces, and leaves explicit
+underline colors alone. Stored characters and copied text are unchanged:
+these options change rendering only.
+
+Set either option to zero to disable that behavior. When retaining an older
+`config.h`, add both definitions from `config.def.h` before building.
+
+The rendering suite covers concealment, partial selections, URL flashes, RGB
+and palette colors, faint/reverse/blink combinations, opt-outs, preserved
+backgrounds and unchanged copying. Run `LC_ALL=C.UTF-8 sh
+tests/rendering.sh`; blink, colors, presentation, emoji, URL and selection
+suites cover interactions with these features.

@@ -13,6 +13,12 @@ static char *font = "Liberation Mono:pixelsize=13:antialias=true:autohint=true";
 static char *emojifont = "Noto Color Emoji";
 static int borderpx = 0;
 
+/* Show SGR 8 (concealed) text as white on dark red. */
+static int revealhidden = 1;
+/* Replace low-contrast foregrounds with black or white; 0 disables it.
+ * Contrast ratio after faint/reverse: use a value between 1 and 4.5. */
+static double mincontrast = 3.0;
+
 /*
  * Program selection, in order of precedence:
  * 1: program passed with -e
