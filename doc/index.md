@@ -12,3 +12,4 @@ change. Settings live in `config.def.h` and take effect through `config.h`.
 - [Text selection and clipboard](selection.md): Select words, paths and logical lines, and copy text to other programs.
 - [Testing and fuzzing](testing.md): Run regression suites and stress the terminal core with reproducible input.
 - [Terminal behavior and limits](terminal-behavior.md): How phist handles control sequences and bounds work triggered by application output.
+- [Window titles](window-titles.md): Keep application titles suitable for task bars and window lists.

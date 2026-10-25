@@ -32,8 +32,9 @@ void xfinishdraw(void) {}
 void xloadcols(void) {}
 int xsetcolorname(int a, const char *b) { return 0; }
 int xgetcolor(int a, unsigned char *b, unsigned char *c, unsigned char *d) { return 0; }
-void xseticontitle(char *s) {}
-void xsettitle(char *s) {}
+static char lasttitle[1024], lasticontitle[1024];
+void xseticontitle(char *s) { snprintf(lasticontitle, sizeof(lasticontitle), "%s", s ? s : ""); }
+void xsettitle(char *s) { snprintf(lasttitle, sizeof(lasttitle), "%s", s ? s : ""); }
 int xsetcursor(int a) { return 0; }
 void xsetmode(int a, unsigned int b) {}
 void xsetsel(char *s) {}

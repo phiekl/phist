@@ -42,6 +42,7 @@
 #define SELCONTEXT    4096 /* cells either side of a click matched by selection patterns */
 #define STR_BUF_SIZ   ESC_BUF_SIZ
 #define STR_MAX_SIZ   (1 << 20) /* longer DCS/OSC/PM/APC strings are discarded */
+#define TITLE_MAX     512       /* bytes of a window title set by applications */
 #define STR_ARG_SIZ   ESC_ARG_SIZ
 
 /* macros */
@@ -187,6 +188,7 @@ static int eschandle(Rune);
 static void strdump(void);
 static void strhandle(void);
 static void strparse(void);
+static char *strtitle(char *);
 static void strreset(void);
 
 static void tprinter(char *, size_t);
@@ -3219,17 +3221,17 @@ strhandle(void)
 		switch (par) {
 		case 0:
 			if (narg > 1) {
-				xsettitle(strescseq.args[1]);
+				xsettitle(strtitle(strescseq.args[1]));
 				xseticontitle(strescseq.args[1]);
 			}
 			return;
 		case 1:
 			if (narg > 1)
-				xseticontitle(strescseq.args[1]);
+				xseticontitle(strtitle(strescseq.args[1]));
 			return;
 		case 2:
 			if (narg > 1)
-				xsettitle(strescseq.args[1]);
+				xsettitle(strtitle(strescseq.args[1]));
 			return;
 		case 52: /* manipulate selection data */
 			if (narg > 2 && allowwindowops) {
@@ -3301,7 +3303,7 @@ strhandle(void)
 		}
 		break;
 	case 'k': /* old title set compatibility */
-		xsettitle(strescseq.args[0]);
+		xsettitle(strtitle(strescseq.args[0]));
 		return;
 	case 'P': /* DCS -- Device Control String */
 	case '_': /* APC -- Application Program Command */
@@ -3333,6 +3335,39 @@ strparse(void)
 			return;
 		*p++ = '\0';
 	}
+}
+
+/* Bound application titles and remove line breaks before publishing them
+ * in task bars and window lists. */
+char *
+strtitle(char *p)
+{
+	char *src, *dst;
+	size_t i;
+
+	if (!p)
+		return p;
+	for (src = dst = p; *src; dst++) {
+		if (ISCONTROLC0((uchar)*src)) {
+			*dst = ' ';
+			src++;
+		} else if (!strncmp(src, "\342\200\250", 3) ||
+		           !strncmp(src, "\342\200\251", 3)) {
+			/* U+2028/U+2029 are mandatory line breaks too (UAX #14). */
+			*dst = ' ';
+			src += 3;
+		} else {
+			*dst = *src++;
+		}
+	}
+	*dst = '\0';
+	if ((i = dst - p) > TITLE_MAX) {
+		/* Do not cut a UTF-8 sequence in half. */
+		for (i = TITLE_MAX; i > 0 && ((uchar)p[i] & 0xC0) == 0x80; i--)
+			;
+		p[i] = '\0';
+	}
+	return p;
 }
 
 void

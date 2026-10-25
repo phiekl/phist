@@ -19,6 +19,7 @@ int
 main(void)
 {
 	Line line;
+	ssize_t n;
 
 	assert(setlocale(LC_CTYPE, "C.UTF-8"));
 	reset(10, 4);
@@ -65,6 +66,42 @@ main(void)
 	close(cmdfd);
 	assert(term.c.x == 0 && term.line[0][0].u == ' ');
 
+	/* Titles stay on one line and are cut at a UTF-8 boundary. */
+	put("\033]0;evil\r\nroot@host: ~\t$\a");
+	assert(!strcmp(lasttitle, "evil  root@host: ~ $"));
+	assert(!strcmp(lasticontitle, lasttitle));
+	put("\033]2;");
+	putrepeat('x', TITLE_MAX - 1);
+	put(WIDE "tail\a");
+	assert(strlen(lasttitle) == TITLE_MAX - 1 && lasttitle[TITLE_MAX - 2] == 'x');
+	put("\033]1;");
+	putrepeat('i', 4 * TITLE_MAX);
+	put("\a");
+	assert(strlen(lasticontitle) == TITLE_MAX);
+	put("\033kold\bstyle\033\\");
+	assert(!strcmp(lasttitle, "old style"));
+	put("\033k\033\\");
+	assert(!strcmp(lasttitle, ""));
+	/* Unicode line and paragraph separators break lines as well. */
+	put("\033]0;first\342\200\250second\342\200\251third\a");
+	assert(!strcmp(lasttitle, "first second third"));
+	assert(!strcmp(lasticontitle, lasttitle));
+	put("\033]1;a\342\200\250b\a");
+	assert(!strcmp(lasticontitle, "a b"));
+	put("\033]2;a\342\200\251b\a");
+	assert(!strcmp(lasttitle, "a b"));
+	put("\033ka\342\200\250b\033\\");
+	assert(!strcmp(lasttitle, "a b"));
+	/* Other characters in the same block are untouched. */
+	put("\033]2;\342\200\246\342\200\252\a");
+	assert(!strcmp(lasttitle, "\342\200\246\342\200\252"));
+	/* The byte limit applies after replacement, so a title of separators is kept. */
+	put("\033]2;");
+	for (n = 0; n < TITLE_MAX; n++)
+		put("\342\200\250");
+	put("\a");
+	assert(strlen(lasttitle) == TITLE_MAX && strspn(lasttitle, " ") == TITLE_MAX);
+
 	/* Strings up to the limit are kept; longer ones stop growing and are dropped. */
 	put("\033[H\033[2J\033]2;");
 	putrepeat('t', STR_MAX_SIZ - 16);
@@ -80,6 +117,6 @@ main(void)
 	put("\033]0;title\a");
 	assert(!strescseq.overflow && strescseq.siz == STR_BUF_SIZ);
 
-	puts("PASS: charset, escape finals, wide overwrite, CSI parameter bounds, no local echo and string length limit");
+	puts("PASS: charset, escape finals, wide overwrite, CSI parameter bounds, no local echo, title sanitising and string length limit");
 	return 0;
 }
