@@ -60,3 +60,21 @@ printf '\033[2h'; sleep 5; printf '\033[2l'
 Keystrokes are delivered and appear when the prompt returns. Previously the
 lock discarded them. The key path and removed mode are covered by
 `LC_ALL=C.UTF-8 sh tests/mouse.sh`.
+
+## String sequences
+
+DCS, OSC, PM and APC payloads are limited to 1 MiB (`STR_MAX_SIZ`). A longer
+sequence is consumed up to its terminator, but excess bytes are dropped and
+the entire sequence is ignored. This prevents an unterminated string from
+growing its buffer until memory is exhausted. The limit still allows
+substantial OSC 52 clipboard data when `allowwindowops` is enabled.
+
+A rejected sequence reports, for example, `erresc: ESCP string longer than
+1048576 bytes ignored`. A long open DCS should keep string-buffer memory
+near the limit rather than near the payload size. If measuring RSS manually,
+send the whole open string and its terminator inside one `sh -c`: an
+interactive shell's title-setting hook can emit an ESC between commands,
+terminating the string early and sending the remaining payload into
+screen/history storage instead.
+
+Run `LC_ALL=C.UTF-8 sh tests/sequences.sh` for overflow and recovery checks.

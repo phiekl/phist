@@ -2,6 +2,19 @@
 
 #define WIDE "\344\270\255" /* U+4E2D, two columns */
 
+static void
+putrepeat(int c, size_t n)
+{
+	char chunk[4096];
+	size_t len;
+
+	memset(chunk, c, sizeof(chunk));
+	for (; n > 0; n -= len) {
+		len = MIN(n, sizeof(chunk));
+		twrite(chunk, len, 0);
+	}
+}
+
 int
 main(void)
 {
@@ -44,6 +57,21 @@ main(void)
 	put("\033[2147483647;2147483647H\033[2147483647D");
 	assert(term.c.x == 0 && term.c.y == 3);
 
-	puts("PASS: charset, escape finals, wide overwrite and CSI parameter bounds");
+	/* Strings up to the limit are kept; longer ones stop growing and are dropped. */
+	put("\033[H\033[2J\033]2;");
+	putrepeat('t', STR_MAX_SIZ - 16);
+	assert(!strescseq.overflow && strescseq.len == STR_MAX_SIZ - 14);
+	put("\033\\");
+	assert(!(term.esc & ESC_STR));
+	put("\033P");
+	putrepeat('d', 8 * STR_MAX_SIZ);
+	assert(strescseq.overflow && strescseq.siz == STR_MAX_SIZ);
+	assert(term.c.x == 0 && term.line[0][0].u == ' ');
+	put("\033\\ok");
+	assert(!(term.esc & ESC_STR) && term.line[0][0].u == 'o');
+	put("\033]0;title\a");
+	assert(!strescseq.overflow && strescseq.siz == STR_BUF_SIZ);
+
+	puts("PASS: charset, escape finals, wide overwrite, CSI parameter bounds and string length limit");
 	return 0;
 }

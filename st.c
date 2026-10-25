@@ -41,6 +41,7 @@
 #define URLTARGET_MAX 2048 /* characters of a URL underlined and copied */
 #define SELCONTEXT    4096 /* cells either side of a click matched by selection patterns */
 #define STR_BUF_SIZ   ESC_BUF_SIZ
+#define STR_MAX_SIZ   (1 << 20) /* longer DCS/OSC/PM/APC strings are discarded */
 #define STR_ARG_SIZ   ESC_ARG_SIZ
 
 /* macros */
@@ -166,6 +167,7 @@ typedef struct {
 	char *buf;             /* allocated raw string */
 	size_t siz;            /* allocation size */
 	size_t len;            /* raw string length */
+	int overflow;          /* exceeded STR_MAX_SIZ and is being discarded */
 	char *args[STR_ARG_SIZ];
 	int narg;              /* nb of args */
 } STREscape;
@@ -3205,6 +3207,11 @@ strhandle(void)
 	};
 
 	term.esc &= ~(ESC_STR_END|ESC_STR);
+	if (strescseq.overflow) {
+		fprintf(stderr, "erresc: ESC%c string longer than %d bytes ignored\n",
+		        strescseq.type, STR_MAX_SIZ);
+		return;
+	}
 	strparse();
 	par = (narg = strescseq.narg) ? atoi(strescseq.args[0]) : 0;
 
@@ -3852,22 +3859,14 @@ tputc(Rune u)
 			goto check_control_code;
 		}
 
+		if (strescseq.overflow)
+			return;
 		if (strescseq.len+len >= strescseq.siz) {
-			/*
-			 * Here is a bug in terminals. If the user never sends
-			 * some code to stop the str or esc command, then st
-			 * will stop responding. But this is better than
-			 * silently failing with unknown characters. At least
-			 * then users will report back.
-			 *
-			 * In the case users ever get fixed, here is the code:
-			 */
-			/*
-			 * term.esc = 0;
-			 * strhandle();
-			 */
-			if (strescseq.siz > (SIZE_MAX - UTF_SIZ) / 2)
+			/* Consume through the terminator, but stop growing the buffer at the limit. */
+			if (strescseq.siz >= STR_MAX_SIZ) {
+				strescseq.overflow = 1;
 				return;
+			}
 			strescseq.siz *= 2;
 			strescseq.buf = xrealloc(strescseq.buf, strescseq.siz);
 		}
