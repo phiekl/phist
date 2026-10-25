@@ -126,6 +126,10 @@ main(void)
 		}
 	testmouse_put("\033[?9;1000;1002;1003;1006;1016h");
 	assert(win.mode == MODE_FOCUSED && !attribute_changes);
+	/* Nor can they lock the keyboard (KAM), which would block typing reset. */
+	testmouse_put("\033[2h\033[2;4h");
+	assert(win.mode == MODE_FOCUSED);
+	testmouse_put("\033[4l");
 
 	/* Movement and all mouse buttons send no mouse input to the child. */
 	testmouse_put("hello world");
@@ -204,6 +208,6 @@ main(void)
 
 	close(sockets[0]);
 	close(sockets[1]);
-	puts("PASS: ignored mouse modes, no mouse input to child, selection, multi-clicks, wheel history, URL copy/flash, middle-click and bracketed paste");
+	puts("PASS: ignored mouse modes and keyboard lock, no mouse input to child, selection, multi-clicks, wheel history, URL copy/flash, middle-click and bracketed paste");
 	return 0;
 }

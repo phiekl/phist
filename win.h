@@ -5,7 +5,6 @@ enum win_mode {
 	MODE_FOCUSED     = 1 << 1,
 	MODE_APPKEYPAD   = 1 << 2,
 	MODE_REVERSE     = 1 << 5,
-	MODE_KBDLOCK     = 1 << 6,
 	MODE_HIDE        = 1 << 7,
 	MODE_APPCURSOR   = 1 << 8,
 	MODE_8BIT        = 1 << 10,

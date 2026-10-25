@@ -44,3 +44,19 @@ printf '\033[0i'
 The launching terminal receives neither raw output nor a screen dump. With
 `phist -o FILE`, Media Copy still writes to `FILE`. See `phist(1)` and run
 `LC_ALL=C.UTF-8 sh tests/printing.sh` for printing regressions.
+
+## Keyboard locking
+
+KAM (`CSI 2 h` / `CSI 2 l`) is ignored. An application or printed file
+cannot disable all keyboard input, including local shortcuts, and leave the
+user unable to type `reset`.
+
+For a bounded manual check, type during the pause:
+
+```sh
+printf '\033[2h'; sleep 5; printf '\033[2l'
+```
+
+Keystrokes are delivered and appear when the prompt returns. Previously the
+lock discarded them. The key path and removed mode are covered by
+`LC_ALL=C.UTF-8 sh tests/mouse.sh`.

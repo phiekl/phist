@@ -2882,9 +2882,7 @@ tsetmode(int priv, int set, const int *args, int narg)
 		} else {
 			switch (*args) {
 			case 0:  /* Error (IGNORED) */
-				break;
-			case 2:
-				xsetmode(set, MODE_KBDLOCK);
+			case 2:  /* KAM -- Keyboard action (IGNORED): would lock out the user */
 				break;
 			case 4:  /* IRM -- Insertion-replacement */
 				MODBIT(term.mode, set, MODE_INSERT);

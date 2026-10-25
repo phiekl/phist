@@ -2900,9 +2900,6 @@ kpress(XEvent *ev)
 	Status status;
 	Shortcut *bp;
 
-	if (IS_SET(MODE_KBDLOCK))
-		return;
-
 	if (xw.ime.xic) {
 		len = XmbLookupString(xw.ime.xic, e, buf, sizeof buf, &ksym, &status);
 		if (status == XBufferOverflow)
