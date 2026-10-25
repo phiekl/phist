@@ -35,3 +35,22 @@ The `phist-bs` and `phist-bs-256color` entries instead advertise DEL
 whose key mappings were changed to send those bytes; with the default
 mappings, use `phist-256color`.
 
+## Bracketed paste
+
+When bracketed paste is enabled, pasted ESC bytes are removed before text is
+wrapped with `ESC [ 200 ~` and `ESC [ 201 ~`. An embedded end marker
+therefore cannot end the bracket early and turn the rest of a paste into
+typed commands. Plain paste is sent unchanged.
+
+For a check that does not execute the pasted text, copy a crafted string,
+then paste it into `cat -v` with Ctrl+Shift+V:
+
+```sh
+printf 'harmless\033[201~id\n' | xclip -selection clipboard
+printf '\033[?2004h'; cat -v
+```
+
+The interior text appears as `harmless[201~id`, with only phist's own ending
+`^[[201~` closing the paste. Press Ctrl+C and run `printf '\033[?2004l'`
+afterwards. Run `LC_ALL=C.UTF-8 sh tests/mouse.sh` for paste-path
+regressions.

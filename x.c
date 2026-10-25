@@ -640,7 +640,7 @@ selnotify(XEvent *e)
 {
 	ulong nitems, ofs, rem;
 	int format;
-	uchar *data, *last, *repl;
+	uchar *data, *last, *repl, *src;
 	Atom type, incratom, property = None;
 
 	incratom = XInternAtom(xw.dpy, "INCR", 0);
@@ -705,9 +705,20 @@ selnotify(XEvent *e)
 			*repl++ = '\r';
 		}
 
+		/*
+		 * A pasted ESC could end the bracket early (ESC [ 201 ~) and
+		 * have the rest run as typed input, so drop it.
+		 */
+		if (IS_SET(MODE_BRCKTPASTE)) {
+			for (src = repl = data; src < last; src++)
+				if (*src != '\033')
+					*repl++ = *src;
+			last = repl;
+		}
+
 		if (IS_SET(MODE_BRCKTPASTE) && ofs == 0)
 			sendinput("\033[200~", 6, 0);
-		sendinput((char *)data, nitems * format / 8, 1);
+		sendinput((char *)data, last - data, 1);
 		if (IS_SET(MODE_BRCKTPASTE) && rem == 0)
 			sendinput("\033[201~", 6, 0);
 		XFree(data);

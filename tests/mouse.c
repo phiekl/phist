@@ -11,7 +11,7 @@ void testmouse_put(const char *);
 int testmouse_offset(void);
 
 static int paste_requests, attribute_changes;
-static const char paste_text[] = "pasted text\nnext line";
+static const char *paste_text = "pasted text\nnext line";
 
 /* Clipboard transport is mocked; terminal parsing and tty I/O are real. */
 int XSetSelectionOwner(Display *d, Atom a, Window w, Time t) { return 0; }
@@ -205,9 +205,17 @@ main(void)
 	click(Button2, 1, 0);
 	selnotify(&pasted);
 	expect_input(sockets[1], "\033[200~pasted text\rnext line\033[201~");
+	/* Pasted ESC bytes cannot end the bracket early and inject input. */
+	paste_text = "a\033[201~echo pwned\n\033\033";
+	selnotify(&pasted);
+	expect_input(sockets[1], "\033[200~a[201~echo pwned\r\033[201~");
+	/* Without bracketed paste, the text is sent unchanged as before. */
+	testmouse_put("\033[?2004l");
+	selnotify(&pasted);
+	expect_input(sockets[1], "a\033[201~echo pwned\r\033\033");
 
 	close(sockets[0]);
 	close(sockets[1]);
-	puts("PASS: ignored mouse modes and keyboard lock, no mouse input to child, selection, multi-clicks, wheel history, URL copy/flash, middle-click and bracketed paste");
+	puts("PASS: ignored mouse modes and keyboard lock, no mouse input to child, selection, multi-clicks, wheel history, URL copy/flash, middle-click and ESC-free bracketed paste");
 	return 0;
 }
