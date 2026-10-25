@@ -78,3 +78,18 @@ terminating the string early and sending the remaining payload into
 screen/history storage instead.
 
 Run `LC_ALL=C.UTF-8 sh tests/sequences.sh` for overflow and recovery checks.
+
+## Local echo
+
+SRM (`CSI 12 l` / `CSI 12 h`) no longer lets applications switch local echo
+on or off. Echo belongs to the pty/application: drawing keystrokes again in
+phist could misrepresent input or reveal typing even with tty echo disabled.
+
+For a manual check, disable tty echo, request local echo and type:
+
+```sh
+stty -echo; printf '\033[12l'; cat >/dev/null
+```
+
+Typing stays invisible. Press Ctrl+C and run `stty echo` to restore the tty.
+`LC_ALL=C.UTF-8 sh tests/sequences.sh` checks the ignored mode.

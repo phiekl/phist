@@ -2889,8 +2889,7 @@ tsetmode(int priv, int set, const int *args, int narg)
 			case 4:  /* IRM -- Insertion-replacement */
 				MODBIT(term.mode, set, MODE_INSERT);
 				break;
-			case 12: /* SRM -- Send/Receive */
-				MODBIT(term.mode, !set, MODE_ECHO);
+			case 12: /* SRM -- Send/Receive (IGNORED): local echo could fake typed input */
 				break;
 			case 20: /* LNM -- Linefeed/new line */
 				MODBIT(term.mode, set, MODE_CRLF);

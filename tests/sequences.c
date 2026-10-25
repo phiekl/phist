@@ -57,6 +57,14 @@ main(void)
 	put("\033[2147483647;2147483647H\033[2147483647D");
 	assert(term.c.x == 0 && term.c.y == 3);
 
+	/* Applications cannot turn on local echo (SRM reset). */
+	put("\033[H\033[2J\033[12l");
+	assert(!IS_SET(MODE_ECHO));
+	assert((cmdfd = open("/dev/null", O_WRONLY)) >= 0);
+	ttywrite("typed", 5, 1);
+	close(cmdfd);
+	assert(term.c.x == 0 && term.line[0][0].u == ' ');
+
 	/* Strings up to the limit are kept; longer ones stop growing and are dropped. */
 	put("\033[H\033[2J\033]2;");
 	putrepeat('t', STR_MAX_SIZ - 16);
@@ -72,6 +80,6 @@ main(void)
 	put("\033]0;title\a");
 	assert(!strescseq.overflow && strescseq.siz == STR_BUF_SIZ);
 
-	puts("PASS: charset, escape finals, wide overwrite, CSI parameter bounds and string length limit");
+	puts("PASS: charset, escape finals, wide overwrite, CSI parameter bounds, no local echo and string length limit");
 	return 0;
 }
