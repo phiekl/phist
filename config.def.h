@@ -75,6 +75,12 @@ int allowaltscreen = 1;
 int allowwindowops = 0;
 
 /*
+ * allow applications to change the palette and default colors (OSC 4, 10,
+ * 11 and 12). Queries and resets are always allowed.
+ */
+int allowcolorchanges = 0;
+
+/*
  * Draw latency range in ms after output or input. Draw near minlatency when
  * updates stop, or wait up to maxlatency during continuous output.
  * Lower minlatency can expose partial updates and cause flicker.

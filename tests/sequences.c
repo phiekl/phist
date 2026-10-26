@@ -19,7 +19,9 @@ int
 main(void)
 {
 	Line line;
+	int fds[2];
 	ssize_t n;
+	char reply[256];
 
 	assert(setlocale(LC_CTYPE, "C.UTF-8"));
 	reset(10, 4);
@@ -65,6 +67,24 @@ main(void)
 	ttywrite("typed", 5, 1);
 	close(cmdfd);
 	assert(term.c.x == 0 && term.line[0][0].u == ' ');
+
+	/* Color changes need allowcolorchanges; queries and resets always work. */
+	assert(pipe(fds) == 0 && fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
+	cmdfd = fds[1];
+	put("\033]4;1;#ff0000\a\033]10;#000000\a\033]11;#000000\033\\\033]12;red\a");
+	assert(colorsets == 0);
+	put("\033]4;1;?\a\033]11;?\a");
+	n = read(fds[0], reply, sizeof(reply) - 1);
+	reply[MAX(n, 0)] = '\0';
+	assert(strstr(reply, "\033]4;1;rgb:") && strstr(reply, "\033]11;rgb:"));
+	put("\033]104;1\a\033]110\a\033]111\a\033]112\a");
+	assert(colorsets == 0 && colorresets == 4);
+	allowcolorchanges = 1;
+	put("\033]4;1;#ff0000\a\033]10;#000000\a\033]11;#000000\a\033]12;red\a");
+	assert(colorsets == 4);
+	allowcolorchanges = 0;
+	close(fds[0]);
+	close(fds[1]);
 
 	/* Titles stay on one line and are cut at a UTF-8 boundary. */
 	put("\033]0;evil\r\nroot@host: ~\t$\a");
@@ -117,6 +137,6 @@ main(void)
 	put("\033]0;title\a");
 	assert(!strescseq.overflow && strescseq.siz == STR_BUF_SIZ);
 
-	puts("PASS: charset, escape finals, wide overwrite, CSI parameter bounds, no local echo, title sanitising and string length limit");
+	puts("PASS: charset, escape finals, wide overwrite, CSI parameter bounds, no local echo, opt-in color changes, title sanitising and string length limit");
 	return 0;
 }

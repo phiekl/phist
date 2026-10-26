@@ -146,6 +146,7 @@ extern wchar_t *worddelimiters;
 extern const char *selectionpatterns[];
 extern int allowaltscreen;
 extern int allowwindowops;
+extern int allowcolorchanges;
 extern char *termname;
 extern unsigned int tabspaces;
 extern unsigned int defaultfg;

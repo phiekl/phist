@@ -3258,6 +3258,9 @@ strhandle(void)
 
 			if (!strcmp(p, "?")) {
 				osc_color_response(par, osc_table[j].idx, 0);
+			} else if (!allowcolorchanges) {
+				fprintf(stderr, "erresc: OSC %d color change ignored "
+				        "(allowcolorchanges = 0)\n", par);
 			} else if (xsetcolorname(osc_table[j].idx, p)) {
 				fprintf(stderr, "erresc: invalid %s color: %s\n",
 				        osc_table[j].str, p);
@@ -3275,6 +3278,9 @@ strhandle(void)
 
 			if (p && !strcmp(p, "?")) {
 				osc_color_response(j, 0, 1);
+			} else if (p && !allowcolorchanges) {
+				fprintf(stderr, "erresc: OSC %d color change ignored "
+				        "(allowcolorchanges = 0)\n", par);
 			} else if (xsetcolorname(j, p)) {
 				if (par == 104 && narg <= 1) {
 					xloadcols();

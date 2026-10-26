@@ -13,7 +13,7 @@ const char *selectionpatterns[] = {
 	"^(.*)$",
 	NULL
 };
-int allowaltscreen = 1, allowwindowops;
+int allowaltscreen = 1, allowwindowops, allowcolorchanges;
 unsigned int tabspaces = 8, defaultfg = 7, defaultbg = 0, defaultcs = 7;
 unsigned int scrollback_lines = 64;
 const char *urlprefixes[] = { "http://", "https://", NULL };
@@ -30,7 +30,8 @@ int xstartdraw(void) { return 0; }
 #endif
 void xfinishdraw(void) {}
 void xloadcols(void) {}
-int xsetcolorname(int a, const char *b) { return 0; }
+static int colorsets, colorresets;
+int xsetcolorname(int a, const char *b) { b ? colorsets++ : colorresets++; return 0; }
 int xgetcolor(int a, unsigned char *b, unsigned char *c, unsigned char *d) { return 0; }
 static char lasttitle[1024], lasticontitle[1024];
 void xseticontitle(char *s) { snprintf(lasticontitle, sizeof(lasticontitle), "%s", s ? s : ""); }

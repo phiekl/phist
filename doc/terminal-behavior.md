@@ -105,3 +105,24 @@ the shell prompt. Vim `FocusGained`/`FocusLost` autocommands and tmux
 To inspect, run `printf '\033[?1004h'; cat -v`, then switch windows and
 back. No focus bytes arrive; press Ctrl+C to finish. Run `LC_ALL=C.UTF-8 sh
 tests/mouse.sh` for mode and focus-event checks.
+
+## Palette changes
+
+`allowcolorchanges = 0` is the default. Applications cannot redefine palette
+entries or default foreground, background and cursor colors with OSC
+4/10/11/12 unless this option is enabled. Ignored requests produce an
+`erresc` diagnostic. This prevents persistent color changes from altering
+the terminal's appearance after an application exits; minimum contrast is
+handled separately by the
+[renderer](appearance.md#concealed-and-low-contrast-text).
+
+Queries (`OSC 4;n;?` and `OSC 10/11/12;?`) and resets (`OSC
+104/110/111/112`) remain allowed. Tools that set color schemes need
+`allowcolorchanges = 1` in `config.h`. Add the new definition from
+`config.def.h` when retaining an older configuration.
+
+For example, `printf '\033]11;#800000\a'` leaves the background unchanged
+with the default setting and reports `erresc: OSC 11 color change ignored
+(allowcolorchanges = 0)` on stderr. Queries still return the configured
+color; `printf '\033]111\a'` resets the background. Run `LC_ALL=C.UTF-8 sh
+tests/sequences.sh`.
