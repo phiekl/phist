@@ -97,8 +97,22 @@ main(void)
 	line_is(term.line[0], "live");
 	put("\033[?1049h\033[3J\033[?1049l");
 	assert(sb.len == 1);
+	/* A full reset (RIS, sent by reset) also keeps the history, like clear. */
 	put("\033[2J\033c");
-	assert(sb.len == 0);
+	assert(sb.len == 2);
+	line_is(sb_get(1), "live");
+	screen_is_blank();
+	put("shown\033[4h\033(0\033[2;3r\033c");
+	assert(sb.len == 3);
+	line_is(sb_get(2), "shown");
+	screen_is_blank();
+	assert(!IS_SET(MODE_INSERT) && term.trantbl[0] == CS_USA);
+	assert(term.top == 0 && term.bot == term.row - 1);
+	assert(term.c.x == 0 && term.c.y == 0);
+	/* From the alternate screen, the main screen is kept, not the full-screen app. */
+	put("main\033[?1049h\033[Hfullscreen\033c");
+	assert(!IS_SET(MODE_ALTSCREEN) && sb.len == 4);
+	line_is(sb_get(3), "main");
 	screen_is_blank();
 
 	reset(10, 8);
@@ -155,6 +169,6 @@ main(void)
 	assert(sb.len == 1);
 	line_is(sb_get(0), "one");
 	screen_is_blank();
-	puts("PASS: clear/Ctrl+L scrollback, cursor and margins, partial erases, alternate screen, ignored ED 3 history erase, reset, wrapped URLs, colors, blank rows, ring eviction");
+	puts("PASS: clear/Ctrl+L scrollback, cursor and margins, partial erases, alternate screen, ignored ED 3 history erase, history-preserving reset, wrapped URLs, colors, blank rows, ring eviction");
 	return 0;
 }

@@ -212,6 +212,7 @@ static void tpresentation(int);
 static Rune compose(Rune, Rune);
 static void tcombine(Rune);
 static void treset(void);
+static void tresetstate(void);
 static void tscrollup(int, int, int);
 static void tscrolldown(int, int);
 static void tsetattr(const int *, int);
@@ -2174,8 +2175,9 @@ tcursor(int mode)
 	}
 }
 
+/* Reset modes, attributes, tabs and both screens, keeping the history. */
 void
-treset(void)
+tresetstate(void)
 {
 	uint i;
 
@@ -2202,6 +2204,12 @@ treset(void)
 			tclearregion(0, 0, term.col-1, term.row-1);
 		tswapscreen();
 	}
+}
+
+void
+treset(void)
+{
+	tresetstate();
 	sb_clear();
 	if (sel.ob.x != -1 && term.row > 0)
 		selclear();
@@ -3742,7 +3750,16 @@ eschandle(Rune ascii)
 		ttywrite(vtiden, strlen(vtiden), 0);
 		break;
 	case 'c': /* RIS -- Reset to initial state */
-		treset();
+		/*
+		 * Like clear, move the main screen into the history rather than
+		 * erasing it, so output cannot wipe its own record (reset sends RIS).
+		 */
+		if (IS_SET(MODE_ALTSCREEN))
+			tswapscreen();
+		sb_preserve_screen();
+		tresetstate();
+		if (sel.ob.x != -1 && term.row > 0)
+			selclear();
 		resettitle();
 		xloadcols();
 		xsetmode(0, MODE_HIDE);
