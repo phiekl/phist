@@ -106,8 +106,16 @@ later output cannot continue a URL through the clear boundary.
 The cursor position and scrolling margins stay intact. Partial erases keep
 their normal behavior, and alternate-screen clears do not enter history. A
 clear returns to the live view and invalidates the URL overlay. Selected
-text moved into history remains selected. At this point, `CSI 3 J` and a
-full terminal reset still discard history and end its selection.
+text moved into history remains selected.
+
+`CSI 3 J` (ED 3, erase scrollback) is ignored and reports `erresc: ED 3
+(erase scrollback) ignored`. Application output cannot use it to erase the
+record of earlier output. The terminfo entry has no `E3` capability; `clear`
+and Ctrl+L use `CSI H CSI 2 J`, which preserves the screen in history. A
+full terminal reset still discards history.
+
+To check ED 3, run `seq 1 200; printf '\033[3J'` and scroll back with the
+wheel or Shift+PageUp: the earlier lines remain accessible.
 
 Run `LC_ALL=C.UTF-8 sh tests/clear.sh` and `LC_ALL=C.UTF-8 sh
 tests/colors.sh`. Checks cover small limits, wrapped URLs, underline

@@ -90,9 +90,13 @@ main(void)
 	reset(20, 5);
 	put("old\033[H\033[2Jlive");
 	assert(sb.len == 1);
+	/* Applications cannot erase the history, only push the screen into it. */
 	put("\033[3J");
-	assert(sb.len == 0);
+	assert(sb.len == 1);
+	line_is(sb_get(0), "old");
 	line_is(term.line[0], "live");
+	put("\033[?1049h\033[3J\033[?1049l");
+	assert(sb.len == 1);
 	put("\033[2J\033c");
 	assert(sb.len == 0);
 	screen_is_blank();
@@ -151,6 +155,6 @@ main(void)
 	assert(sb.len == 1);
 	line_is(sb_get(0), "one");
 	screen_is_blank();
-	puts("PASS: clear/Ctrl+L scrollback, cursor and margins, partial erases, alternate screen, explicit history erase, reset, wrapped URLs, colors, blank rows, ring eviction");
+	puts("PASS: clear/Ctrl+L scrollback, cursor and margins, partial erases, alternate screen, ignored ED 3 history erase, reset, wrapped URLs, colors, blank rows, ring eviction");
 	return 0;
 }

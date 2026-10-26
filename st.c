@@ -1161,15 +1161,6 @@ sb_preserve_screen(void)
 	sb_view_changed();
 }
 
-static void
-sb_reset_on_clear(void)
-{
-	sb_clear();
-	sb_view_changed();
-	if (sel.ob.x != -1 && term.row > 0)
-		selclear();
-}
-
 ssize_t
 xwrite(int fd, const char *s, size_t len)
 {
@@ -3032,9 +3023,8 @@ csihandle(void)
 				sb_preserve_screen();
 			tclearregion(0, 0, term.col-1, term.row-1);
 			break;
-		case 3:
-			if (!IS_SET(MODE_ALTSCREEN))
-				sb_reset_on_clear();
+		case 3: /* scrollback (IGNORED): would let output erase its own record */
+			fprintf(stderr, "erresc: ED 3 (erase scrollback) ignored\n");
 			break;
 		default:
 			goto unknown;
