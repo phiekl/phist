@@ -2846,14 +2846,10 @@ focus(XEvent *ev)
 		win.mode |= MODE_FOCUSED;
 		blinkreset(); /* show the cursor at once, then resume blinking */
 		xseturgency(0);
-		if (IS_SET(MODE_FOCUS))
-			ttywrite("\033[I", 3, 0);
 	} else {
 		if (xw.ime.xic)
 			XUnsetICFocus(xw.ime.xic);
 		win.mode &= ~MODE_FOCUSED;
-		if (IS_SET(MODE_FOCUS))
-			ttywrite("\033[O", 3, 0);
 	}
 }
 

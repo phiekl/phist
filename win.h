@@ -10,7 +10,6 @@ enum win_mode {
 	MODE_8BIT        = 1 << 10,
 	MODE_BLINK       = 1 << 11,
 	MODE_FBLINK      = 1 << 12,
-	MODE_FOCUS       = 1 << 13,
 	MODE_BRCKTPASTE  = 1 << 16,
 	MODE_NUMLOCK     = 1 << 17,
 };

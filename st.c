@@ -2834,9 +2834,6 @@ tsetmode(int priv, int set, const int *args, int narg)
 			case 25: /* DECTCEM -- Text Cursor Enable Mode */
 				xsetmode(!set, MODE_HIDE);
 				break;
-			case 1004: /* 1004: send focus events to tty */
-				xsetmode(set, MODE_FOCUS);
-				break;
 			case 1034: /* 1034: enable 8-bit mode for keyboard input */
 				xsetmode(set, MODE_8BIT);
 				break;
@@ -2876,6 +2873,12 @@ tsetmode(int priv, int set, const int *args, int narg)
 			case 1007: /* alternate-screen wheel-to-key translation */
 			case 1015: /* urxvt coordinates */
 			case 1016: /* SGR pixel coordinates */
+			/*
+			 * Nor focus reports: left enabled by a program that
+			 * exits, or by printing a file, they would inject
+			 * ESC [ I and ESC [ O into the shell on every focus change.
+			 */
+			case 1004:
 				break;
 			default:
 				fprintf(stderr,

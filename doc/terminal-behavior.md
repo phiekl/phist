@@ -93,3 +93,15 @@ stty -echo; printf '\033[12l'; cat >/dev/null
 
 Typing stays invisible. Press Ctrl+C and run `stty echo` to restore the tty.
 `LC_ALL=C.UTF-8 sh tests/sequences.sh` checks the ignored mode.
+
+## Focus reporting
+
+Focus mode 1004 is ignored. Gaining or losing focus no longer sends `ESC [
+I` / `ESC [ O` to the child, even if an application enabled the mode before
+exiting. This keeps output or an abandoned mode from leaving those bytes at
+the shell prompt. Vim `FocusGained`/`FocusLost` autocommands and tmux
+`focus-events` consequently do not fire.
+
+To inspect, run `printf '\033[?1004h'; cat -v`, then switch windows and
+back. No focus bytes arrive; press Ctrl+C to finish. Run `LC_ALL=C.UTF-8 sh
+tests/mouse.sh` for mode and focus-event checks.

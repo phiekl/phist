@@ -19,6 +19,7 @@ Window XGetSelectionOwner(Display *d, Atom a) { return xw.win; }
 int XFlush(Display *d) { return 0; }
 int XFree(void *p) { free(p); return 0; }
 int XDeleteProperty(Display *d, Window w, Atom a) { return 0; }
+XWMHints *XGetWMHints(Display *d, Window w) { return NULL; }
 
 Atom
 XInternAtom(Display *d, const char *name, Bool only)
@@ -100,11 +101,11 @@ expect_input(int fd, const char *want)
 int
 main(void)
 {
-	const int modes[] = {9, 1000, 1001, 1002, 1003, 1005, 1006, 1007, 1015, 1016};
+	const int modes[] = {9, 1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1015, 1016};
 	const char *url = "https://example.org/path";
 	int sockets[2], i, set;
 	char sequence[64];
-	XEvent pasted = {0};
+	XEvent pasted = {0}, focusevent = {0};
 
 	setlocale(LC_CTYPE, "");
 	assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
@@ -130,6 +131,14 @@ main(void)
 	testmouse_put("\033[2h\033[2;4h");
 	assert(win.mode == MODE_FOCUSED);
 	testmouse_put("\033[4l");
+	/* Focus changes are not reported to the child, even when requested. */
+	testmouse_put("\033[?1004h");
+	focusevent.type = FocusOut;
+	focus(&focusevent);
+	focusevent.type = FocusIn;
+	focus(&focusevent);
+	assert(win.mode == MODE_FOCUSED);
+	expect_input(sockets[1], NULL);
 
 	/* Movement and all mouse buttons send no mouse input to the child. */
 	testmouse_put("hello world");
@@ -216,6 +225,6 @@ main(void)
 
 	close(sockets[0]);
 	close(sockets[1]);
-	puts("PASS: ignored mouse modes and keyboard lock, no mouse input to child, selection, multi-clicks, wheel history, URL copy/flash, middle-click and ESC-free bracketed paste");
+	puts("PASS: ignored mouse/focus modes and keyboard lock, no focus reports, no mouse input to child, selection, multi-clicks, wheel history, URL copy/flash, middle-click and ESC-free bracketed paste");
 	return 0;
 }
