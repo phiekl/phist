@@ -113,8 +113,23 @@ main(void)
 	put("\033ka\342\200\250b\033\\");
 	assert(!strcmp(lasttitle, "a b"));
 	/* Other characters in the same block are untouched. */
-	put("\033]2;\342\200\246\342\200\252\a");
-	assert(!strcmp(lasttitle, "\342\200\246\342\200\252"));
+	put("\033]2;\342\200\246\342\200\242\a");
+	assert(!strcmp(lasttitle, "\342\200\246\342\200\242"));
+	/* Explicit bidi controls are removed from titles. */
+	put("\033]2;invoice\342\200\256fdp.exe\a");
+	assert(!strcmp(lasttitle, "invoicefdp.exe"));
+	put("\033]0;\342\200\252a\342\200\253b\342\200\254c\342\200\255d\342\200\216e"
+	    "\342\200\217f\330\234g\342\201\246h\342\201\247i\342\201\250j\342\201\251\a");
+	assert(!strcmp(lasttitle, "abcdefghij") && !strcmp(lasticontitle, lasttitle));
+	put("\033ka\342\200\256b\033\\");
+	assert(!strcmp(lasttitle, "ab"));
+	/* Right-to-left text itself is kept. */
+	put("\033]2;\327\251\327\234\327\225\327\235 \330\263\331\204\330\247\331\205\a");
+	assert(!strcmp(lasttitle, "\327\251\327\234\327\225\327\235 \330\263\331\204\330\247\331\205"));
+	/* The parser has already replaced invalid and truncated UTF-8. */
+	put("\033]2;a\377b\342\200\a");
+	assert(!strcmp(lasttitle, "a\357\277\275b\357\277\275"));
+
 	/* The byte limit applies after replacement, so a title of separators is kept. */
 	put("\033]2;");
 	for (n = 0; n < TITLE_MAX; n++)

@@ -30,3 +30,23 @@ raw title's byte length.
 
 Run `LC_ALL=C.UTF-8 sh tests/sequences.sh` for title filtering and length
 regressions.
+
+## Bidirectional controls
+
+Explicit bidi controls are removed from application titles: LRM, RLM and ALM
+(U+200E, U+200F, U+061C), embeddings/overrides U+202A–U+202E and isolates
+U+2066–U+2069. Left in, they would make window managers display text in a
+misleading order, such as an executable name looking like a PDF. Ordinary
+right-to-left text still uses the window manager's normal bidi rendering.
+
+`strtitle()` decodes UTF-8 rather than relying on byte-pattern matching. For
+an inspection example:
+
+```sh
+sh -c 'printf "\033]2;invoice\342\200\256fdp.exe\a"; sleep 0.5; xprop -id "$WINDOWID" _NET_WM_NAME | od -c'
+```
+
+The stored title is `invoicefdp.exe`, with no U+202E bytes (`342 200 256`).
+Inspect the bytes, as the control itself is invisible, and keep setting and
+inspecting the title in one shell command to avoid prompt hooks. The
+sequence suite covers these removals.

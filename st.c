@@ -3344,27 +3344,37 @@ strparse(void)
 	}
 }
 
-/* Bound application titles and remove line breaks before publishing them
- * in task bars and window lists. */
+/* Characters removed from window titles. */
+static int
+titledrop(Rune u)
+{
+	/* Bidi controls: the window list would show the text reordered. */
+	return u == 0x061C || BETWEEN(u, 0x200E, 0x200F) ||
+	       BETWEEN(u, 0x202A, 0x202E) || BETWEEN(u, 0x2066, 0x2069);
+}
+
+/* Bound application titles, remove line breaks and filter explicit bidi
+ * controls before publishing them in task bars and window lists. */
 char *
 strtitle(char *p)
 {
-	char *src, *dst;
-	size_t i;
+	char *src, *dst, *end;
+	size_t i, len;
+	Rune u;
 
 	if (!p)
 		return p;
-	for (src = dst = p; *src; dst++) {
-		if (ISCONTROLC0((uchar)*src)) {
-			*dst = ' ';
-			src++;
-		} else if (!strncmp(src, "\342\200\250", 3) ||
-		           !strncmp(src, "\342\200\251", 3)) {
+	end = p + strlen(p);
+	for (src = dst = p; src < end; src += len) {
+		/* Copy undecodable bytes (only possible outside UTF-8 mode) as is. */
+		if (!(len = utf8decode(src, &u, end - src)))
+			len = end - src;
+		if (ISCONTROLC0(u) || u == 0x2028 || u == 0x2029) {
 			/* U+2028/U+2029 are mandatory line breaks too (UAX #14). */
-			*dst = ' ';
-			src += 3;
-		} else {
-			*dst = *src++;
+			*dst++ = ' ';
+		} else if (!titledrop(u)) {
+			memmove(dst, src, len);
+			dst += len;
 		}
 	}
 	*dst = '\0';
