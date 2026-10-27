@@ -66,3 +66,33 @@ readiness result could block too.
 The reply suite forces a one-byte user-input write with a silent child and
 checks that all input arrives without blocking: `LC_ALL=C.UTF-8 sh
 tests/replies.sh`.
+
+## Queued replies
+
+Replies to DA, DECID, DSR/CPR and OSC color queries use a nonblocking queue
+of up to 4,096 bytes. While replies are pending, the main loop also waits
+for a writable tty, so a query followed by a read is answered promptly. If a
+child keeps querying without reading and a reply does not fit, that reply is
+dropped with a rate-limited diagnostic.
+
+If phist cannot read the tty flags, enable nonblocking writes or restore
+the original flags, it exits with a diagnostic rather than risk a
+blocking write or leave incorrect flags in place.
+
+Previously, a blocking write inside the parser could drain child output by
+calling `ttyread()` recursively. It could reparse the outer call's static
+buffer, recurse on further queries and mistake a zero-length read into a
+full buffer for EOF. Query floods could garble output or close phist. The
+parser no longer writes replies this way, and `ttyread()` refuses to read
+into a full buffer.
+
+Replies already pending when user input begins go first, including the rest
+of a partially written reply. Replies generated while that input is being
+written go afterwards. A key cannot split a reply, a reply cannot split a
+paste, and continuous queries cannot indefinitely hold input back.
+User-input writes are still synchronous at this stage.
+
+The reply suite forces partial writes to check ordering. A bounded manual
+stress case is `yes "$(printf '\033[6n')" | head -n 300000; echo survived`.
+It should reach `survived` without closing phist. Replies that fit in the tty
+and queue then reach the shell as input; Ctrl+C discards them.

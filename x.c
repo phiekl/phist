@@ -3029,7 +3029,7 @@ run(void)
 {
 	XEvent ev;
 	int w = win.w, h = win.h;
-	fd_set rfd;
+	fd_set rfd, wfd;
 	int xfd = XConnectionNumber(xw.dpy), ttyfd, xev, drawing;
 	struct timespec seltv, *tv, now, trigger;
 	double timeout, urlremain, bellremain;
@@ -3056,8 +3056,12 @@ run(void)
 	clock_gettime(CLOCK_MONOTONIC, &lastblink);
 	for (timeout = -1, drawing = 0;;) {
 		FD_ZERO(&rfd);
+		FD_ZERO(&wfd);
 		FD_SET(ttyfd, &rfd);
 		FD_SET(xfd, &rfd);
+		/* Deliver queued query replies as soon as the child reads. */
+		if (ttyreplypending())
+			FD_SET(ttyfd, &wfd);
 
 		if (XPending(xw.dpy))
 			timeout = 0;  /* existing events might not set xfd */
@@ -3066,13 +3070,15 @@ run(void)
 		seltv.tv_nsec = 1E6 * (timeout - 1E3 * seltv.tv_sec);
 		tv = timeout >= 0 ? &seltv : NULL;
 
-		if (pselect(MAX(xfd, ttyfd)+1, &rfd, NULL, NULL, tv, NULL) < 0) {
+		if (pselect(MAX(xfd, ttyfd)+1, &rfd, &wfd, NULL, tv, NULL) < 0) {
 			if (errno == EINTR)
 				continue;
 			die("select failed: %s\n", strerror(errno));
 		}
 		clock_gettime(CLOCK_MONOTONIC, &now);
 
+		if (FD_ISSET(ttyfd, &wfd))
+			ttyflushreplies();
 		if (FD_ISSET(ttyfd, &rfd))
 			ttyread();
 

@@ -47,6 +47,7 @@
 #define TITLE_MAX     512       /* bytes of a window title set by applications */
 #define ERRESC_BURST  20        /* diagnostics printed before rate limiting */
 #define ERRESC_RATE   5         /* diagnostics per second after a burst */
+#define REPLY_MAX     4096      /* bytes of query replies waiting for the child */
 #define DUMP_MAX      128       /* bytes of a sequence shown in a diagnostic */
 #define TITLE_MARKS   4         /* combining marks kept per character in titles */
 #define STR_ARG_SIZ   ESC_ARG_SIZ
@@ -1962,6 +1963,9 @@ ttyread(void)
 	static int buflen = 0;
 	int ret, written;
 
+	/* Only an incomplete UTF-8 sequence is kept, so there is always room. */
+	if (buflen >= LEN(buf))
+		return 0;
 	/* append read bytes to unprocessed bytes */
 	ret = read(cmdfd, buf+buflen, LEN(buf)-buflen);
 
@@ -1981,6 +1985,14 @@ ttyread(void)
 	}
 }
 
+/* Queue query replies instead of writing from the parser: a blocking write
+ * could reenter ttyread() and reparse its buffer. Drop replies that do not fit. */
+static struct {
+	char buf[REPLY_MAX];
+	size_t len;
+	int userwrite; /* user input is being written; replies wait for it */
+} replies;
+
 void
 ttyinput(const char *s, size_t n, int may_echo)
 {
@@ -1999,17 +2011,30 @@ void
 ttywrite(const char *s, size_t n, int may_echo)
 {
 	const char *next;
+	size_t len;
 
 	if (may_echo && IS_SET(MODE_ECHO))
 		twrite(s, n, 1);
 
+	/*
+	 * Keep user input (keys, pastes) in order with query replies: the
+	 * replies queued now, perhaps partly written, go out first, and
+	 * replies to output read meanwhile wait until the input is written,
+	 * so neither can split the other. Only those queued on entry are sent
+	 * first, so a child sending queries all the time cannot hold back the
+	 * input.
+	 */
+	replies.userwrite++;
+	if ((len = replies.len) > 0) {
+		/* ttyread() may append replies after len; they stay queued. */
+		ttywriteraw(replies.buf, len);
+		replies.len -= len;
+		memmove(replies.buf, replies.buf + len, replies.len);
+	}
 	if (!IS_SET(MODE_CRLF)) {
 		ttywriteraw(s, n);
-		return;
-	}
-
-	/* This is similar to how the kernel handles ONLCR for ttys */
-	while (n > 0) {
+	} else while (n > 0) {
+		/* This is similar to how the kernel handles ONLCR for ttys */
 		if (*s == '\r') {
 			next = s + 1;
 			ttywriteraw("\r\n", 2);
@@ -2021,6 +2046,52 @@ ttywrite(const char *s, size_t n, int may_echo)
 		n -= next - s;
 		s = next;
 	}
+	replies.userwrite--;
+	ttyflushreplies();
+}
+
+void
+ttyreply(const char *s, size_t n)
+{
+	if (n > sizeof(replies.buf) - replies.len) {
+		erresc("erresc: reply dropped, child is not reading "
+		       "(%zu bytes pending)\n", replies.len);
+		return;
+	}
+	memcpy(replies.buf + replies.len, s, n);
+	replies.len += n;
+	ttyflushreplies();
+}
+
+int
+ttyreplypending(void)
+{
+	return replies.len > 0;
+}
+
+void
+ttyflushreplies(void)
+{
+	ssize_t r;
+	int flags, saved;
+
+	if (!replies.len || replies.userwrite)
+		return;
+	/* Require nonblocking mode before writing, and preserve the original flags. */
+	if ((flags = fcntl(cmdfd, F_GETFL)) < 0 ||
+	    fcntl(cmdfd, F_SETFL, flags | O_NONBLOCK) < 0)
+		die("couldn't make tty nonblocking: %s\n", strerror(errno));
+	r = write(cmdfd, replies.buf, replies.len);
+	saved = errno;
+	if (fcntl(cmdfd, F_SETFL, flags) < 0)
+		die("couldn't restore tty flags: %s\n", strerror(errno));
+	if (r < 0) {
+		if (saved == EAGAIN || saved == EWOULDBLOCK || saved == EINTR)
+			return;
+		die("write error on tty: %s\n", strerror(saved));
+	}
+	replies.len -= r;
+	memmove(replies.buf, replies.buf + r, replies.len);
 }
 
 void
@@ -2960,7 +3031,7 @@ csihandle(void)
 		break;
 	case 'c': /* DA -- Device Attributes */
 		if (csiescseq.arg[0] == 0)
-			ttywrite(vtiden, strlen(vtiden), 0);
+			ttyreply(vtiden, strlen(vtiden));
 		break;
 	case 'b': /* REP -- if last char is printable print it <n> more times */
 		LIMIT(csiescseq.arg[0], 1, 65535);
@@ -3100,12 +3171,12 @@ csihandle(void)
 	case 'n': /* DSR -- Device Status Report */
 		switch (csiescseq.arg[0]) {
 		case 5: /* Status Report "OK" `0n` */
-			ttywrite("\033[0n", sizeof("\033[0n") - 1, 0);
+			ttyreply("\033[0n", sizeof("\033[0n") - 1);
 			break;
 		case 6: /* Report Cursor Position (CPR) "<row>;<column>R" */
 			len = snprintf(buf, sizeof(buf), "\033[%i;%iR",
 			               term.c.y+1, term.c.x+1);
-			ttywrite(buf, len, 0);
+			ttyreply(buf, len);
 			break;
 		default:
 			goto unknown;
@@ -3236,7 +3307,7 @@ osc_color_response(int num, int index, int is_osc4)
 		       n < 0 ? "snprintf failed" : "truncation occurred",
 		       is_osc4 ? "osc4" : "osc");
 	} else {
-		ttywrite(buf, n, 0);
+		ttyreply(buf, n);
 	}
 }
 
@@ -3775,7 +3846,7 @@ tcontrolcode(uchar ascii)
 	case 0x99:   /* TODO: SGCI */
 		break;
 	case 0x9a:   /* DECID -- Identify Terminal */
-		ttywrite(vtiden, strlen(vtiden), 0);
+		ttyreply(vtiden, strlen(vtiden));
 		break;
 	case 0x9b:   /* TODO: CSI */
 	case 0x9c:   /* TODO: ST */
@@ -3847,7 +3918,7 @@ eschandle(Rune ascii)
 		}
 		break;
 	case 'Z': /* DECID -- Identify Terminal */
-		ttywrite(vtiden, strlen(vtiden), 0);
+		ttyreply(vtiden, strlen(vtiden));
 		break;
 	case 'c': /* RIS -- Reset to initial state */
 		/*
