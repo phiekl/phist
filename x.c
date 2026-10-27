@@ -176,6 +176,7 @@ static void xunloadfont(Font *);
 static void xunloadfonts(void);
 static void xsetenv(void);
 static void xseturgency(int);
+static void xflushtitles(void);
 static int evcol(XEvent *);
 static int evrow(XEvent *);
 
@@ -1498,6 +1499,7 @@ xinit(int cols, int rows)
 
 	win.mode = MODE_NUMLOCK;
 	resettitle();
+	xflushtitles(); /* name the window before it is mapped */
 	xhints();
 	XMapWindow(xw.dpy, xw.win);
 	XSync(xw.dpy, False);
@@ -2409,38 +2411,61 @@ xsetenv(void)
 	setenv("WINDOWID", buf, 1);
 }
 
-void
-xseticontitle(char *p)
+/*
+ * Titles are only recorded here and applied once per draw by xflushtitles(),
+ * so a flood of title changes cannot keep the window manager and task bar
+ * redrawing.
+ */
+static char *pendingtitle, *pendingicontitle;
+
+static void
+xpendtitle(char **pending, char *p)
 {
-	XTextProperty prop;
 	DEFAULT(p, opt_title);
 
 	if (p[0] == '\0')
 		p = opt_title;
+	free(*pending);
+	*pending = xstrdup(p);
+}
 
-	if (Xutf8TextListToTextProperty(xw.dpy, &p, 1, XUTF8StringStyle,
-	                                &prop) != Success)
-		return;
-	XSetWMIconName(xw.dpy, xw.win, &prop);
-	XSetTextProperty(xw.dpy, xw.win, &prop, xw.netwmiconname);
-	XFree(prop.value);
+void
+xseticontitle(char *p)
+{
+	xpendtitle(&pendingicontitle, p);
 }
 
 void
 xsettitle(char *p)
 {
+	xpendtitle(&pendingtitle, p);
+}
+
+void
+xflushtitles(void)
+{
 	XTextProperty prop;
-	DEFAULT(p, opt_title);
 
-	if (p[0] == '\0')
-		p = opt_title;
-
-	if (Xutf8TextListToTextProperty(xw.dpy, &p, 1, XUTF8StringStyle,
-	                                &prop) != Success)
-		return;
-	XSetWMName(xw.dpy, xw.win, &prop);
-	XSetTextProperty(xw.dpy, xw.win, &prop, xw.netwmname);
-	XFree(prop.value);
+	if (pendingicontitle) {
+		if (Xutf8TextListToTextProperty(xw.dpy, &pendingicontitle, 1,
+		                                XUTF8StringStyle, &prop) == Success) {
+			XSetWMIconName(xw.dpy, xw.win, &prop);
+			XSetTextProperty(xw.dpy, xw.win, &prop, xw.netwmiconname);
+			XFree(prop.value);
+		}
+		free(pendingicontitle);
+		pendingicontitle = NULL;
+	}
+	if (pendingtitle) {
+		if (Xutf8TextListToTextProperty(xw.dpy, &pendingtitle, 1,
+		                                XUTF8StringStyle, &prop) == Success) {
+			XSetWMName(xw.dpy, xw.win, &prop);
+			XSetTextProperty(xw.dpy, xw.win, &prop, xw.netwmname);
+			XFree(prop.value);
+		}
+		free(pendingtitle);
+		pendingtitle = NULL;
+	}
 }
 
 
@@ -3097,6 +3122,8 @@ run(void)
 		if (urlremain > 0 && (timeout < 0 || urlremain < timeout))
 			timeout = urlremain;
 
+		/* Even when hidden, so task bars never show a stale title. */
+		xflushtitles();
 		draw();
 		if (vbellset) {
 			clock_gettime(CLOCK_MONOTONIC, &now);

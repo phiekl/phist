@@ -19,6 +19,33 @@ Window XGetSelectionOwner(Display *d, Atom a) { return xw.win; }
 int XFlush(Display *d) { return 0; }
 int XFree(void *p) { free(p); return 0; }
 int XDeleteProperty(Display *d, Window w, Atom a) { return 0; }
+static int wmname_sets, wmiconname_sets;
+static char wmname[64], wmiconname[64];
+
+int
+Xutf8TextListToTextProperty(Display *d, char **list, int count,
+                            XICCEncodingStyle style, XTextProperty *prop)
+{
+	prop->value = (unsigned char *)xstrdup(list[0]);
+	return Success;
+}
+
+void
+XSetWMName(Display *d, Window w, XTextProperty *prop)
+{
+	wmname_sets++;
+	snprintf(wmname, sizeof(wmname), "%s", (char *)prop->value);
+}
+
+void
+XSetWMIconName(Display *d, Window w, XTextProperty *prop)
+{
+	wmiconname_sets++;
+	snprintf(wmiconname, sizeof(wmiconname), "%s", (char *)prop->value);
+}
+
+void XSetTextProperty(Display *d, Window w, XTextProperty *prop, Atom a) {}
+
 static int wmhints_reads;
 XWMHints *XGetWMHints(Display *d, Window w) { wmhints_reads++; return NULL; }
 
@@ -244,8 +271,24 @@ main(void)
 	assert(BETWEEN(wmhints_reads, 3, 6));
 	win.mode = MODE_FOCUSED;
 
+	/* A flood of title changes reaches X once, with the latest title. */
+	opt_title = "phist";
+	for (i = 0; i < 1000; i++) {
+		snprintf(sequence, sizeof(sequence), "\033]0;title %d\a", i);
+		testmouse_put(sequence);
+	}
+	assert(!wmname_sets && !wmiconname_sets);
+	xflushtitles();
+	assert(wmname_sets == 1 && !strcmp(wmname, "title 999"));
+	assert(wmiconname_sets == 1 && !strcmp(wmiconname, "title 999"));
+	xflushtitles();
+	assert(wmname_sets == 1 && wmiconname_sets == 1);
+	testmouse_put("\033]2;\a");
+	xflushtitles();
+	assert(wmname_sets == 2 && !strcmp(wmname, "phist") && wmiconname_sets == 1);
+
 	close(sockets[0]);
 	close(sockets[1]);
-	puts("PASS: ignored mouse/focus modes and keyboard lock, no focus reports, no mouse input to child, selection, multi-clicks, wheel history, URL copy/flash, middle-click, ESC-free bracketed paste and bell rate limiting");
+	puts("PASS: ignored mouse/focus modes and keyboard lock, no focus reports, no mouse input to child, selection, multi-clicks, wheel history, URL copy/flash, middle-click, ESC-free bracketed paste, bell rate limiting and title coalescing");
 	return 0;
 }

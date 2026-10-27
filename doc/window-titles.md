@@ -91,3 +91,25 @@ To inspect, set a title containing `x` followed by many U+0336 marks in one
 marks should remain. Count characters, not bytes: `xprop` in the C locale
 may show escaped octal bytes rather than Unicode. Run `LC_ALL=C.UTF-8 sh
 tests/sequences.sh`.
+
+## Update scheduling
+
+`xsettitle()` and `xseticontitle()` retain the latest pending title; `run()`
+applies it once per draw cycle. A flood of OSC 0/1/2 or `ESC k` updates
+therefore sends the latest value at the normal drawing cadence, roughly 30
+times per second with continuous output and the default `maxlatency` of 33
+ms, rather than once per input sequence.
+
+Pending titles flush even when the window is hidden, keeping task-bar
+entries current, and before the window is first mapped. This reduces X
+traffic and window-manager redraws without leaving the final title stale.
+
+For a manual check, watch a task-bar entry while running:
+
+```sh
+timeout 3 sh -c 'i=0; while :; do printf "\033]2;flood %d\a" "$i"; i=$((i+1)); done'
+```
+
+The mouse/event suite (`LC_ALL=C.UTF-8 sh tests/mouse.sh`) checks pending
+title replacement and draw-time flushing, in addition to parser filtering in
+the sequence suite.
