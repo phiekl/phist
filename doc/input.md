@@ -54,3 +54,15 @@ The interior text appears as `harmless[201~id`, with only phist's own ending
 `^[[201~` closing the paste. Press Ctrl+C and run `printf '\033[?2004l'`
 afterwards. Run `LC_ALL=C.UTF-8 sh tests/mouse.sh` for paste-path
 regressions.
+
+## Short writes
+
+A short write does not imply that child output is ready to read.
+`ttywriteraw()` retries after the tty becomes writable; output is read only
+when `select()` reports readability. Reading immediately after a short write
+could block forever with a silent child, and a second read using the same
+readiness result could block too.
+
+The reply suite forces a one-byte user-input write with a silent child and
+checks that all input arrives without blocking: `LC_ALL=C.UTF-8 sh
+tests/replies.sh`.

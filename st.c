@@ -2057,13 +2057,8 @@ ttywriteraw(const char *s, size_t n)
 			if ((r = write(cmdfd, s, (n < lim)? n : lim)) < 0)
 				goto write_error;
 			if (r < n) {
-				/*
-				 * We weren't able to write out everything.
-				 * This means the buffer is getting full
-				 * again. Empty it.
-				 */
-				if (n < lim)
-					lim = ttyread();
+				/* A short write says nothing about output readiness. Read below
+				 * only if select() reported it, and consume that readiness once. */
 				n -= r;
 				s += r;
 			} else {
