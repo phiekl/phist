@@ -230,3 +230,15 @@ It should finish promptly rather than wait on an X round trip for each byte.
 With the window focused and audible bell disabled, even the old path was
 inexpensive; test unfocused behavior to observe the difference. The
 mouse/event suite checks bell throttling and repeated accepted bells.
+
+## Reverse-video updates
+
+DECSCNM (`CSI ? 5 h` / `CSI ? 5 l`) marks the screen dirty rather than
+redrawing synchronously for every mode change. The next normal frame renders
+the latest mode, so output alternating reverse video cannot force one full
+redraw per sequence. The screen can still change at frame rate, as with
+other application redraws.
+
+A manual stress check is `timeout 3 yes "$(printf '\033[?5h\033[?5l')"`. The
+mouse/event suite checks dirty marking and the following frame through the
+terminal parser.

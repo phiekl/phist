@@ -9,6 +9,7 @@
 void testmouse_init(int, int, int);
 void testmouse_put(const char *);
 int testmouse_offset(void);
+int testmouse_alldirty(void);
 
 static int paste_requests, attribute_changes;
 static const char *paste_text = "pasted text\nnext line";
@@ -19,6 +20,11 @@ Window XGetSelectionOwner(Display *d, Atom a) { return xw.win; }
 int XFlush(Display *d) { return 0; }
 int XFree(void *p) { free(p); return 0; }
 int XDeleteProperty(Display *d, Window w, Atom a) { return 0; }
+/* Count synchronous full redraws (linked with -Wl,--wrap=redraw). */
+static int redraws;
+void __real_redraw(void);
+void __wrap_redraw(void) { redraws++; __real_redraw(); }
+
 static int wmname_sets, wmiconname_sets;
 static char wmname[64], wmiconname[64];
 
@@ -271,6 +277,16 @@ main(void)
 	assert(BETWEEN(wmhints_reads, 3, 6));
 	win.mode = MODE_FOCUSED;
 
+	/* Reverse video toggles only mark the screen for the next frame. */
+	redraws = 0;
+	for (i = 0; i < 1000; i++)
+		testmouse_put(i % 2 ? "\033[?5l" : "\033[?5h");
+	testmouse_put("\033[?5h");
+	assert(redraws == 0 && (win.mode & MODE_REVERSE));
+	assert(testmouse_alldirty());
+	testmouse_put("\033[?5l");
+	assert(!(win.mode & MODE_REVERSE));
+
 	/* A flood of title changes reaches X once, with the latest title. */
 	opt_title = "phist";
 	for (i = 0; i < 1000; i++) {
@@ -289,6 +305,6 @@ main(void)
 
 	close(sockets[0]);
 	close(sockets[1]);
-	puts("PASS: ignored mouse/focus modes and keyboard lock, no focus reports, no mouse input to child, selection, multi-clicks, wheel history, URL copy/flash, middle-click, ESC-free bracketed paste, bell rate limiting and title coalescing");
+	puts("PASS: ignored mouse/focus modes and keyboard lock, no focus reports, no mouse input to child, selection, multi-clicks, wheel history, URL copy/flash, middle-click, ESC-free bracketed paste, bell rate limiting, coalesced reverse video and title coalescing");
 	return 0;
 }

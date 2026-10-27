@@ -2814,8 +2814,12 @@ xsetmode(int set, unsigned int flags)
 {
 	int mode = win.mode;
 	MODBIT(win.mode, set, flags);
+	/*
+	 * Redraw with the next frame rather than at once, so a flood of
+	 * reverse video toggles (CSI ? 5 h/l) costs one redraw per frame.
+	 */
 	if ((win.mode & MODE_REVERSE) != (mode & MODE_REVERSE))
-		redraw();
+		tfulldirt();
 }
 
 int

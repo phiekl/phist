@@ -16,6 +16,17 @@ testmouse_put(const char *text)
 }
 
 int
+testmouse_alldirty(void)
+{
+	int y;
+
+	for (y = 0; y < term.row; y++)
+		if (!term.dirty[y])
+			return 0;
+	return 1;
+}
+
+int
 testmouse_offset(void)
 {
 	return sb.view_offset;

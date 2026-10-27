@@ -5,7 +5,7 @@ testdir=$(mktemp -d)
 trap 'rm -rf "$testdir"' 0
 ${CC:-cc} -std=c99 -D_XOPEN_SOURCE=600 ${CFLAGS:-} \
 	$(pkg-config --cflags fontconfig freetype2) \
-	tests/mouse.c tests/mouse-terminal.c -o "$testdir/mouse" \
+	tests/mouse.c tests/mouse-terminal.c -o "$testdir/mouse" -Wl,--wrap=redraw \
 	-lm -lrt -lX11 -lutil -lXft -lXrender $(pkg-config --libs fontconfig freetype2)
 "$testdir/mouse"
 tic -x -o "$testdir/terminfo" st.info
