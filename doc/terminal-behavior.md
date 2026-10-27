@@ -147,3 +147,14 @@ initial 20 plus five per second), rather than hundreds of thousands. Long
 unknown OSC payloads should show the truncation suffix. Exact counts depend
 on timing and other diagnostics. Run `LC_ALL=C.UTF-8 sh tests/sequences.sh`
 for rate, suppression and dump limits.
+
+## Vim compatibility probe
+
+The exact `ESC [ 0 % m` probe Vim sends at startup is a silent no-op. It
+leaves attributes and cursor position unchanged. Similar unknown sequences
+with another parameter, final byte or private prefix still produce normal
+diagnostics.
+
+Run `printf '\033[0%%m'` to emit it directly; `%%` produces the literal
+percent sign for `printf`. Stderr stays quiet. The sequence suite checks
+both the exact probe and nearby sequences that must still be diagnosed.

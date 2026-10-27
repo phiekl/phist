@@ -59,6 +59,17 @@ main(void)
 	assert(setlocale(LC_CTYPE, "C.UTF-8"));
 	reset(10, 4);
 
+	/* Vim's CSI intermediate-byte probe is a silent no-op, not SGR 0. */
+	put("\033[1;31mX");
+	assert(!*puterr("\033[0%m"));
+	assert(term.c.attr.fg == 1 && (term.c.attr.mode & ATTR_BOLD));
+	assert(term.c.x == 1 && term.c.y == 0 && term.line[0][0].u == 'X');
+	assert(!strcmp(puterr("\033[1%m"), "erresc: unknown csi ESC[1%m\n"));
+	assert(!strcmp(puterr("\033[0%z"), "erresc: unknown csi ESC[0%z\n"));
+	assert(!strcmp(puterr("\033[?0%m"), "erresc: unknown csi ESC[?0%m\n"));
+	assert(!strcmp(puterr("\033[0;0%m"), "erresc: unknown csi ESC[0;0%m\n"));
+	reset(10, 4);
+
 	/* Charset designators wider than a byte are rejected, not truncated. */
 	put("\033(0");
 	assert(term.trantbl[0] == CS_GRAPHIC0);

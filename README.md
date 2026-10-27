@@ -32,8 +32,8 @@ phist is an X11 terminal emulator forked from [st](https://st.suckless.org/).
 - [Visible concealed text and minimum
   contrast](doc/appearance.md#concealed-and-low-contrast-text), with [opt-in
   palette changes](doc/terminal-behavior.md#palette-changes).
-- [Output controls](doc/terminal-behavior.md): explicit Media Copy, no
-  keyboard lock/local echo, bounded strings and rate-limited diagnostics.
+- [Output controls and parser limits](doc/terminal-behavior.md), with bounded
+  diagnostics and silent Vim compatibility probes.
 - [ESC filtering in bracketed pastes](doc/input.md#bracketed-paste).
 - [Filtered, bounded titles](doc/window-titles.md) with combining-mark limits
   and updates batched with drawing.

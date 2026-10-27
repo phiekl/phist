@@ -2987,6 +2987,10 @@ csihandle(void)
 	char buf[40];
 	int len;
 
+	/* Vim's compatibility probe for CSI sequences with an intermediate. */
+	if (csiescseq.len == 3 && !memcmp(csiescseq.buf, "0%m", 3))
+		return;
+
 	switch (csiescseq.mode[0]) {
 	default:
 	unknown:
