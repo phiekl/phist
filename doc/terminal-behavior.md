@@ -126,3 +126,24 @@ with the default setting and reports `erresc: OSC 11 color change ignored
 (allowcolorchanges = 0)` on stderr. Queries still return the configured
 color; `printf '\033]111\a'` resets the background. Run `LC_ALL=C.UTF-8 sh
 tests/sequences.sh`.
+
+## Diagnostics
+
+Input-triggered escape diagnostics go through `erresc()`: a burst of 20
+messages is printed, followed by at most five per second. The next printed
+message reports dropped messages as `erresc: N messages suppressed`.
+Occasional diagnostics remain visible; startup and resize errors are
+unaffected.
+
+CSI and string dumps follow the diagnostic they belong to and stop after 128
+bytes, appending the original length as `...(N bytes)`. An unknown OSC can
+no longer add up to 1 MiB to stderr in one dump, and flooded unknown CSI
+sequences cannot fill session logs at input speed.
+
+To inspect, start phist with stderr redirected to a chosen file, emit many
+unknown `CSI 999 x` sequences inside it, and inspect that file from the
+launching shell. A two-second flood should produce about 30 diagnostics (the
+initial 20 plus five per second), rather than hundreds of thousands. Long
+unknown OSC payloads should show the truncation suffix. Exact counts depend
+on timing and other diagnostics. Run `LC_ALL=C.UTF-8 sh tests/sequences.sh`
+for rate, suppression and dump limits.

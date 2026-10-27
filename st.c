@@ -17,6 +17,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 #include <wchar.h>
 
@@ -44,6 +45,9 @@
 #define STR_BUF_SIZ   ESC_BUF_SIZ
 #define STR_MAX_SIZ   (1 << 20) /* longer DCS/OSC/PM/APC strings are discarded */
 #define TITLE_MAX     512       /* bytes of a window title set by applications */
+#define ERRESC_BURST  20        /* diagnostics printed before rate limiting */
+#define ERRESC_RATE   5         /* diagnostics per second after a burst */
+#define DUMP_MAX      128       /* bytes of a sequence shown in a diagnostic */
 #define TITLE_MARKS   4         /* combining marks kept per character in titles */
 #define STR_ARG_SIZ   ESC_ARG_SIZ
 
@@ -180,6 +184,7 @@ static void stty(char **);
 static void sigchld(int);
 static void ttywriteraw(const char *, size_t);
 
+static int erresc(const char *, ...);
 static void csidump(void);
 static void csihandle(void);
 static int readcolonargs(char **, int, int[][CAR_PER_ARG]);
@@ -2626,7 +2631,7 @@ tdefcolor(const int *attr, int *npar, int l)
 	switch (attr[*npar + 1]) {
 	case 2: /* direct color in RGB space */
 		if (*npar + 4 >= l) {
-			fprintf(stderr,
+			erresc(
 				"erresc(%d): Incorrect number of parameters (%d)\n",
 				attr[*npar], *npar);
 			break;
@@ -2636,21 +2641,21 @@ tdefcolor(const int *attr, int *npar, int l)
 		b = attr[*npar + 4];
 		*npar += 4;
 		if (!BETWEEN(r, 0, 255) || !BETWEEN(g, 0, 255) || !BETWEEN(b, 0, 255))
-			fprintf(stderr, "erresc: bad rgb color (%u,%u,%u)\n",
+			erresc("erresc: bad rgb color (%u,%u,%u)\n",
 				r, g, b);
 		else
 			idx = TRUECOLOR(r, g, b);
 		break;
 	case 5: /* indexed color */
 		if (*npar + 2 >= l) {
-			fprintf(stderr,
+			erresc(
 				"erresc(%d): Incorrect number of parameters (%d)\n",
 				attr[*npar], *npar);
 			break;
 		}
 		*npar += 2;
 		if (!BETWEEN(attr[*npar], 0, 255))
-			fprintf(stderr, "erresc: bad fgcolor %d\n", attr[*npar]);
+			erresc("erresc: bad fgcolor %d\n", attr[*npar]);
 		else
 			idx = attr[*npar];
 		break;
@@ -2659,8 +2664,8 @@ tdefcolor(const int *attr, int *npar, int l)
 	case 3: /* direct color in CMY space */
 	case 4: /* direct color in CMYK space */
 	default:
-		fprintf(stderr, "erresc(%d): gfx attr %d unknown\n",
-		        attr[*npar], attr[*npar + 1]);
+		erresc("erresc(%d): gfx attr %d unknown\n",
+		       attr[*npar], attr[*npar + 1]);
 		break;
 	}
 
@@ -2775,7 +2780,7 @@ tsetattr(const int *attr, int l)
 			} else if (BETWEEN(attr[i], 100, 107)) {
 				term.c.attr.bg = attr[i] - 100 + 8;
 			} else {
-				fprintf(stderr,
+				erresc(
 					"erresc(default): gfx attr %d unknown\n",
 					attr[i]);
 				csidump();
@@ -2882,7 +2887,7 @@ tsetmode(int priv, int set, const int *args, int narg)
 			case 1004:
 				break;
 			default:
-				fprintf(stderr,
+				erresc(
 					"erresc: unknown private set/reset mode %d\n",
 					*args);
 				break;
@@ -2901,7 +2906,7 @@ tsetmode(int priv, int set, const int *args, int narg)
 				MODBIT(term.mode, set, MODE_CRLF);
 				break;
 			default:
-				fprintf(stderr,
+				erresc(
 					"erresc: unknown set/reset mode %d\n",
 					*args);
 				break;
@@ -2919,7 +2924,7 @@ csihandle(void)
 	switch (csiescseq.mode[0]) {
 	default:
 	unknown:
-		fprintf(stderr, "erresc: unknown csi ");
+		erresc("erresc: unknown csi ");
 		csidump();
 		/* die(""); */
 		break;
@@ -3034,7 +3039,7 @@ csihandle(void)
 			tclearregion(0, 0, term.col-1, term.row-1);
 			break;
 		case 3: /* scrollback (IGNORED): would let output erase its own record */
-			fprintf(stderr, "erresc: ED 3 (erase scrollback) ignored\n");
+			erresc("erresc: ED 3 (erase scrollback) ignored\n");
 			break;
 		default:
 			goto unknown;
@@ -3144,14 +3149,53 @@ csihandle(void)
 	}
 }
 
+static struct {
+	double tokens;
+	struct timespec last;
+	unsigned long suppressed;
+	int shown;
+} errlimit = { .tokens = ERRESC_BURST };
+
+/* Rate-limit input diagnostics to ERRESC_BURST initially, then ERRESC_RATE per
+ * second. Report suppressed messages with the next diagnostic. Return whether
+ * it was printed so csidump()/strdump() can follow the same limit. */
+int
+erresc(const char *fmt, ...)
+{
+	struct timespec now;
+	va_list ap;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	if (errlimit.last.tv_sec || errlimit.last.tv_nsec)
+		errlimit.tokens = MIN(ERRESC_BURST, errlimit.tokens +
+		                      TIMEDIFF(now, errlimit.last) * ERRESC_RATE / 1000.0);
+	errlimit.last = now;
+	if (!(errlimit.shown = errlimit.tokens >= 1)) {
+		errlimit.suppressed++;
+		return 0;
+	}
+	errlimit.tokens--;
+	if (errlimit.suppressed) {
+		fprintf(stderr, "erresc: %lu messages suppressed\n",
+		        errlimit.suppressed);
+		errlimit.suppressed = 0;
+	}
+	va_start(ap, fmt);
+	vfprintf(stderr, fmt, ap);
+	va_end(ap);
+	return 1;
+}
+
 void
 csidump(void)
 {
 	size_t i;
 	uint c;
 
+	if (!errlimit.shown)
+		return;
 	fprintf(stderr, "ESC[");
-	for (i = 0; i < csiescseq.len; i++) {
+	for (i = 0; i < csiescseq.len && i < DUMP_MAX; i++) {
 		c = csiescseq.buf[i] & 0xff;
 		if (isprint(c)) {
 			putc(c, stderr);
@@ -3165,6 +3209,8 @@ csidump(void)
 			fprintf(stderr, "(%02x)", c);
 		}
 	}
+	if (csiescseq.len > DUMP_MAX)
+		fprintf(stderr, "...(%zu bytes)", csiescseq.len);
 	putc('\n', stderr);
 }
 
@@ -3182,18 +3228,18 @@ osc_color_response(int num, int index, int is_osc4)
 	unsigned char r, g, b;
 
 	if (xgetcolor(is_osc4 ? num : index, &r, &g, &b)) {
-		fprintf(stderr, "erresc: failed to fetch %s color %d\n",
-		        is_osc4 ? "osc4" : "osc",
-		        is_osc4 ? num : index);
+		erresc("erresc: failed to fetch %s color %d\n",
+		       is_osc4 ? "osc4" : "osc",
+		       is_osc4 ? num : index);
 		return;
 	}
 
 	n = snprintf(buf, sizeof buf, "\033]%s%d;rgb:%02x%02x/%02x%02x/%02x%02x\007",
 	             is_osc4 ? "4;" : "", num, r, r, g, g, b, b);
 	if (n < 0 || n >= sizeof(buf)) {
-		fprintf(stderr, "error: %s while printing %s response\n",
-		        n < 0 ? "snprintf failed" : "truncation occurred",
-		        is_osc4 ? "osc4" : "osc");
+		erresc("error: %s while printing %s response\n",
+		       n < 0 ? "snprintf failed" : "truncation occurred",
+		       is_osc4 ? "osc4" : "osc");
 	} else {
 		ttywrite(buf, n, 0);
 	}
@@ -3212,8 +3258,8 @@ strhandle(void)
 
 	term.esc &= ~(ESC_STR_END|ESC_STR);
 	if (strescseq.overflow) {
-		fprintf(stderr, "erresc: ESC%c string longer than %d bytes ignored\n",
-		        strescseq.type, STR_MAX_SIZ);
+		erresc("erresc: ESC%c string longer than %d bytes ignored\n",
+		       strescseq.type, STR_MAX_SIZ);
 		return;
 	}
 	strparse();
@@ -3243,7 +3289,7 @@ strhandle(void)
 					xsetsel(dec);
 					xclipcopy();
 				} else {
-					fprintf(stderr, "erresc: invalid base64\n");
+					erresc("erresc: invalid base64\n");
 				}
 			}
 			return;
@@ -3259,11 +3305,11 @@ strhandle(void)
 			if (!strcmp(p, "?")) {
 				osc_color_response(par, osc_table[j].idx, 0);
 			} else if (!allowcolorchanges) {
-				fprintf(stderr, "erresc: OSC %d color change ignored "
-				        "(allowcolorchanges = 0)\n", par);
+				erresc("erresc: OSC %d color change ignored "
+				       "(allowcolorchanges = 0)\n", par);
 			} else if (xsetcolorname(osc_table[j].idx, p)) {
-				fprintf(stderr, "erresc: invalid %s color: %s\n",
-				        osc_table[j].str, p);
+				erresc("erresc: invalid %s color: %s\n",
+				       osc_table[j].str, p);
 			} else {
 				tfulldirt();
 			}
@@ -3279,15 +3325,15 @@ strhandle(void)
 			if (p && !strcmp(p, "?")) {
 				osc_color_response(j, 0, 1);
 			} else if (p && !allowcolorchanges) {
-				fprintf(stderr, "erresc: OSC %d color change ignored "
-				        "(allowcolorchanges = 0)\n", par);
+				erresc("erresc: OSC %d color change ignored "
+				       "(allowcolorchanges = 0)\n", par);
 			} else if (xsetcolorname(j, p)) {
 				if (par == 104 && narg <= 1) {
 					xloadcols();
 					return; /* color reset without parameter */
 				}
-				fprintf(stderr, "erresc: invalid color j=%d, p=%s\n",
-				        j, p ? p : "(null)");
+				erresc("erresc: invalid color j=%d, p=%s\n",
+				       j, p ? p : "(null)");
 			} else {
 				/*
 				 * TODO if defaultbg color is changed, borders
@@ -3304,7 +3350,7 @@ strhandle(void)
 			if ((j = par - 110) < 0 || j >= LEN(osc_table))
 				break; /* shouldn't be possible */
 			if (xsetcolorname(osc_table[j].idx, NULL)) {
-				fprintf(stderr, "erresc: %s color not found\n", osc_table[j].str);
+				erresc("erresc: %s color not found\n", osc_table[j].str);
 			} else {
 				tfulldirt();
 			}
@@ -3320,7 +3366,7 @@ strhandle(void)
 		return;
 	}
 
-	fprintf(stderr, "erresc: unknown str ");
+	erresc("erresc: unknown str ");
 	strdump();
 }
 
@@ -3436,8 +3482,14 @@ strdump(void)
 	size_t i;
 	uint c;
 
+	if (!errlimit.shown)
+		return;
 	fprintf(stderr, "ESC%c", strescseq.type);
 	for (i = 0; i < strescseq.len; i++) {
+		if (i == DUMP_MAX) {
+			fprintf(stderr, "...(%zu bytes)\n", strescseq.len);
+			return;
+		}
 		c = strescseq.buf[i] & 0xff;
 		if (c == '\0') {
 			putc('\n', stderr);
@@ -3569,9 +3621,9 @@ tdeftran(Rune ascii)
 	/* strchr() also matches the terminator; wider runes must not truncate. */
 	if (!BETWEEN(ascii, 0x01, 0x7f) || (p = strchr(cs, ascii)) == NULL) {
 		if (BETWEEN(ascii, 0x20, 0x7e))
-			fprintf(stderr, "esc unhandled charset: ESC ( %c\n", (int)ascii);
+			erresc("esc unhandled charset: ESC ( %c\n", (int)ascii);
 		else
-			fprintf(stderr, "esc unhandled charset: ESC ( U+%04X\n", (unsigned)ascii);
+			erresc("esc unhandled charset: ESC ( U+%04X\n", (unsigned)ascii);
 	} else {
 		term.trantbl[term.icharset] = vcs[p - cs];
 	}
@@ -3835,7 +3887,7 @@ eschandle(Rune ascii)
 			strhandle();
 		break;
 	default:
-		fprintf(stderr, "erresc: unknown sequence ESC 0x%02X '%c'\n",
+		erresc("erresc: unknown sequence ESC 0x%02X '%c'\n",
 			(unsigned)ascii, BETWEEN(ascii, 0x20, 0x7e) ? (int)ascii : '.');
 		break;
 	}

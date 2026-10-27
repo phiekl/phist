@@ -2,6 +2,39 @@
 
 #define WIDE "\344\270\255" /* U+4E2D, two columns */
 
+/* Run put(text) with stderr captured; return what was printed. */
+static char *
+puterr(const char *text)
+{
+	static char out[65536];
+	FILE *f = tmpfile();
+	int saved = dup(2);
+	size_t n;
+
+	assert(f && saved >= 0);
+	fflush(stderr);
+	dup2(fileno(f), 2);
+	put(text);
+	fflush(stderr);
+	dup2(saved, 2);
+	close(saved);
+	rewind(f);
+	n = fread(out, 1, sizeof(out) - 1, f);
+	out[n] = '\0';
+	fclose(f);
+	return out;
+}
+
+static int
+countlines(const char *s)
+{
+	int n = 0;
+
+	for (; *s; s++)
+		n += *s == '\n';
+	return n;
+}
+
 static void
 putrepeat(int c, size_t n)
 {
@@ -185,6 +218,39 @@ main(void)
 	put("\033]0;title\a");
 	assert(!strescseq.overflow && strescseq.siz == STR_BUF_SIZ);
 
-	puts("PASS: charset, escape finals, wide overwrite, CSI parameter bounds, no local echo, opt-in color changes, title sanitising and string length limit");
+	/* Diagnostics are rate-limited and dumps are cut short. */
+	{
+		static char flood[1000 * 6 + 1], longstr[10010], longcsi[ESC_BUF_SIZ];
+		char *out;
+
+		for (m = 0; m < 1000; m++)
+			memcpy(flood + 6 * m, "\033[999x", 6);
+		errlimit.tokens = ERRESC_BURST;
+		errlimit.suppressed = 0;
+		out = puterr(flood);
+		assert(countlines(out) == ERRESC_BURST);
+		assert(strstr(out, "erresc: unknown csi ESC[999x\n") == out);
+		errlimit.tokens = 1; /* as if time had passed */
+		out = puterr("\033[998x");
+		assert(!strncmp(out, "erresc: 980 messages suppressed\n"
+		                "erresc: unknown csi ESC[998x\n", 999));
+		errlimit.tokens = ERRESC_BURST;
+		snprintf(longstr, sizeof(longstr), "\033]9");
+		memset(longstr + 3, 'x', 10000);
+		strcpy(longstr + 10003, "\a");
+		out = puterr(longstr);
+		assert(countlines(out) == 1 && strstr(out, "...(10001 bytes)\n"));
+		assert(strlen(out) < 2 * DUMP_MAX);
+		longcsi[0] = '\033';
+		longcsi[1] = '[';
+		memset(longcsi + 2, '1', sizeof(longcsi) - 4);
+		longcsi[sizeof(longcsi) - 2] = 'x';
+		out = puterr(longcsi);
+		assert(countlines(out) == 1 && strstr(out, "...("));
+		assert(strlen(out) < 2 * DUMP_MAX);
+		puterr("\033[H\033[2J");
+	}
+
+	puts("PASS: charset, escape finals, wide overwrite, CSI parameter bounds, no local echo, opt-in color changes, title sanitising, string length limit and rate-limited diagnostics");
 	return 0;
 }
