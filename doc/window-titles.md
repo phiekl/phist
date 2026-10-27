@@ -71,3 +71,23 @@ sh -c 'printf "\033]2;ro\342\200\213ot\a"; sleep 0.5; xprop -id "$WINDOWID" _NET
 
 The title becomes plain `root`, without the ZERO WIDTH SPACE bytes `342 200
 213`. Run the sequence suite for filtering regressions.
+
+## Combining marks
+
+At most four combining marks and joiners (U+200C/U+200D) are retained after
+each character. A title can otherwise stack hundreds of marks even within
+512 bytes, drawing over neighboring task-bar entries. Four allows common
+stacked Vietnamese, Hebrew and Tibetan marks. Each emoji starts a new count,
+so ordinary emoji ZWJ sequences are unaffected.
+
+`combining.h` is a sorted table of Unicode categories Mn, Me and Mc,
+generated from Python `unicodedata` using Unicode 15.1.0, matching
+`compose.h`. The filter uses this table instead of `wcwidth()`: phist still
+decodes UTF-8 in a C locale, where locale-dependent width lookup does not
+recognize the marks. Tests check both C.UTF-8 and C.
+
+To inspect, set a title containing `x` followed by many U+0336 marks in one
+`sh -c`, wait, and read `_NET_WM_NAME` with `xprop` as above. Only four
+marks should remain. Count characters, not bytes: `xprop` in the C locale
+may show escaped octal bytes rather than Unicode. Run `LC_ALL=C.UTF-8 sh
+tests/sequences.sh`.

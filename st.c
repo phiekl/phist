@@ -23,6 +23,7 @@
 #include "st.h"
 #include "win.h"
 #include "compose.h"
+#include "combining.h"
 
 #if   defined(__linux)
  #include <pty.h>
@@ -43,6 +44,7 @@
 #define STR_BUF_SIZ   ESC_BUF_SIZ
 #define STR_MAX_SIZ   (1 << 20) /* longer DCS/OSC/PM/APC strings are discarded */
 #define TITLE_MAX     512       /* bytes of a window title set by applications */
+#define TITLE_MARKS   4         /* combining marks kept per character in titles */
 #define STR_ARG_SIZ   ESC_ARG_SIZ
 
 /* macros */
@@ -3344,6 +3346,24 @@ strparse(void)
 	}
 }
 
+/* Whether u is a combining mark, whatever the locale. */
+static int
+iscombining(Rune u)
+{
+	size_t lo = 0, hi = LEN(combiningtbl), mid;
+
+	while (lo < hi) {
+		mid = (lo + hi) / 2;
+		if (u < combiningtbl[mid].first)
+			hi = mid;
+		else if (u > combiningtbl[mid].last)
+			lo = mid + 1;
+		else
+			return 1;
+	}
+	return 0;
+}
+
 /* Characters removed from window titles. */
 static int
 titledrop(Rune u)
@@ -3373,6 +3393,7 @@ strtitle(char *p)
 {
 	char *src, *dst, *end;
 	size_t i, len;
+	int marks = 0;
 	Rune u;
 
 	if (!p)
@@ -3385,10 +3406,19 @@ strtitle(char *p)
 		if (ISCONTROLC0(u) || u == 0x2028 || u == 0x2029) {
 			/* U+2028/U+2029 are mandatory line breaks too (UAX #14). */
 			*dst++ = ' ';
-		} else if (!titledrop(u)) {
-			memmove(dst, src, len);
-			dst += len;
+			marks = 0;
+			continue;
 		}
+		if (titledrop(u))
+			continue;
+		/* Limit stacked marks and joiners using Unicode categories, since
+		 * wcwidth() does not recognize them in non-UTF-8 locales. */
+		if (!iscombining(u) && u != 0x200C && u != 0x200D)
+			marks = 0;
+		else if (++marks > TITLE_MARKS)
+			continue;
+		memmove(dst, src, len);
+		dst += len;
 	}
 	*dst = '\0';
 	if ((i = dst - p) > TITLE_MAX) {

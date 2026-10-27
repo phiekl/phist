@@ -19,7 +19,7 @@ int
 main(void)
 {
 	Line line;
-	int fds[2];
+	int fds[2], loc, m;
 	ssize_t n;
 	char reply[256];
 
@@ -134,6 +134,28 @@ main(void)
 	assert(!strcmp(lasticontitle, lasttitle));
 	put("\033ka\342\200\213b\033\\");
 	assert(!strcmp(lasttitle, "ab"));
+	/*
+	 * Only a few combining marks are kept per character, also in locales
+	 * where wcwidth() does not know them.
+	 */
+	for (loc = 0; loc < 2; loc++) {
+		assert(setlocale(LC_CTYPE, loc ? "C" : "C.UTF-8"));
+		assert(loc ? wcwidth(0x0336) != 0 : wcwidth(0x0336) == 0);
+		put("\033]2;a\314\200\314\201\314\202\314\203\314\204\314\205\314\206b\314\200 "
+		    "c\314\200\314\201\314\202\314\203\a");
+		assert(!strcmp(lasttitle, "a\314\200\314\201\314\202\314\203b\314\200 "
+		    "c\314\200\314\201\314\202\314\203"));
+		put("\033]2;\360\237\221\250\342\200\215\360\237\221\251\342\200\215\360\237\221\247"
+		    "\342\200\215\360\237\221\246 \340\244\225\340\245\215\340\244\267\340\245\200\a");
+		assert(!strcmp(lasttitle, "\360\237\221\250\342\200\215\360\237\221\251\342\200\215\360\237\221\247"
+		    "\342\200\215\360\237\221\246 \340\244\225\340\245\215\340\244\267\340\245\200"));
+		put("\033]2;");
+		for (m = 0; m < 200; m++)
+			put("\314\266");
+		put("x\a");
+		assert(!strcmp(lasttitle, "\314\266\314\266\314\266\314\266x"));
+	}
+	assert(setlocale(LC_CTYPE, "C.UTF-8") && wcwidth(0x0300) == 0);
 	/* Right-to-left text itself is kept. */
 	put("\033]2;\327\251\327\234\327\225\327\235 \330\263\331\204\330\247\331\205\a");
 	assert(!strcmp(lasttitle, "\327\251\327\234\327\225\327\235 \330\263\331\204\330\247\331\205"));
