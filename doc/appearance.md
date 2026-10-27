@@ -208,3 +208,25 @@ and palette colors, faint/reverse/blink combinations, opt-outs, preserved
 backgrounds and unchanged copying. Run `LC_ALL=C.UTF-8 sh
 tests/rendering.sh`; blink, colors, presentation, emoji, URL and selection
 suites cover interactions with these features.
+
+## Bell rate limit
+
+BEL is accepted at most once every 100 ms (`BELLGAP`), limiting audible
+bells, visual-bell restarts and urgency-hint updates to about ten per
+second. An unfocused bell otherwise reads and rewrites the urgency hint,
+adding two X round trips for every BEL. Flooded output can no longer do that
+work for every byte.
+
+An accepted bell still restarts the visual effect. Holding Backspace at an
+empty Bash prompt therefore keeps the default 150 ms bell flashing, while
+separate presses still ring. To check a flood, run this and focus another
+window during the pause:
+
+```sh
+sleep 3; time (head -c 300000 /dev/zero | tr '\0' '\a')
+```
+
+It should finish promptly rather than wait on an X round trip for each byte.
+With the window focused and audible bell disabled, even the old path was
+inexpensive; test unfocused behavior to observe the difference. The
+mouse/event suite checks bell throttling and repeated accepted bells.

@@ -19,7 +19,8 @@ Window XGetSelectionOwner(Display *d, Atom a) { return xw.win; }
 int XFlush(Display *d) { return 0; }
 int XFree(void *p) { free(p); return 0; }
 int XDeleteProperty(Display *d, Window w, Atom a) { return 0; }
-XWMHints *XGetWMHints(Display *d, Window w) { return NULL; }
+static int wmhints_reads;
+XWMHints *XGetWMHints(Display *d, Window w) { wmhints_reads++; return NULL; }
 
 Atom
 XInternAtom(Display *d, const char *name, Bool only)
@@ -223,8 +224,28 @@ main(void)
 	selnotify(&pasted);
 	expect_input(sockets[1], "a\033[201~echo pwned\r\033\033");
 
+	/* A flood of BELs rings once per BELLGAP; later bells ring again. */
+	win.mode = 0; /* unfocused: each ring sets the urgency hint */
+	nanosleep(&(struct timespec){ .tv_nsec = (BELLGAP + 20) * 1000000L }, NULL);
+	wmhints_reads = 0;
+	for (i = 0; i < 1000; i++)
+		testmouse_put("\a");
+	assert(wmhints_reads == 1);
+	nanosleep(&(struct timespec){ .tv_nsec = (BELLGAP + 20) * 1000000L }, NULL);
+	testmouse_put("\a");
+	assert(wmhints_reads == 2);
+	/* A steady stream, like a held key, keeps ringing at the limited rate. */
+	nanosleep(&(struct timespec){ .tv_nsec = (BELLGAP + 20) * 1000000L }, NULL);
+	wmhints_reads = 0;
+	for (i = 0; i < 16; i++) {
+		testmouse_put("\a");
+		nanosleep(&(struct timespec){ .tv_nsec = 30 * 1000000L }, NULL);
+	}
+	assert(BETWEEN(wmhints_reads, 3, 6));
+	win.mode = MODE_FOCUSED;
+
 	close(sockets[0]);
 	close(sockets[1]);
-	puts("PASS: ignored mouse/focus modes and keyboard lock, no focus reports, no mouse input to child, selection, multi-clicks, wheel history, URL copy/flash, middle-click and ESC-free bracketed paste");
+	puts("PASS: ignored mouse/focus modes and keyboard lock, no focus reports, no mouse input to child, selection, multi-clicks, wheel history, URL copy/flash, middle-click, ESC-free bracketed paste and bell rate limiting");
 	return 0;
 }

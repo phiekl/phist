@@ -2821,9 +2821,20 @@ xseturgency(int add)
 	XFree(h);
 }
 
+/* Limit audible bells, visual restarts and urgency updates to one per BELLGAP
+ * ms. This bounds X traffic while allowing held keys to renew the visual bell. */
+#define BELLGAP 100
+
 void
 xbell(void)
 {
+	static struct timespec last;
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	if (TIMEDIFF(now, last) < BELLGAP)
+		return;
+	last = now;
 	if (!(IS_SET(MODE_FOCUSED)))
 		xseturgency(1);
 	if (bellvolume)
