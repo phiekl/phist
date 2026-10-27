@@ -123,6 +123,17 @@ main(void)
 	assert(!strcmp(lasttitle, "abcdefghij") && !strcmp(lasticontitle, lasttitle));
 	put("\033ka\342\200\256b\033\\");
 	assert(!strcmp(lasttitle, "ab"));
+	/* Invisible characters are removed, but not joiners or variation selectors. */
+	put("\033]2;a\342\200\213b\342\201\240c\357\273\277d\302\255e\315\217f"
+	    "\341\205\237g\343\205\244h\342\201\242i\341\240\216j\363\240\201\201k\a");
+	assert(!strcmp(lasttitle, "abcdefghijk"));
+	put("\033]0;\360\237\221\250\342\200\215\360\237\221\251 \342\235\244\357\270\217 "
+	    "\330\252\342\200\214\330\250 \350\276\273\363\240\204\200\a");
+	assert(!strcmp(lasttitle, "\360\237\221\250\342\200\215\360\237\221\251 \342\235\244\357\270\217 "
+	    "\330\252\342\200\214\330\250 \350\276\273\363\240\204\200"));
+	assert(!strcmp(lasticontitle, lasttitle));
+	put("\033ka\342\200\213b\033\\");
+	assert(!strcmp(lasttitle, "ab"));
 	/* Right-to-left text itself is kept. */
 	put("\033]2;\327\251\327\234\327\225\327\235 \330\263\331\204\330\247\331\205\a");
 	assert(!strcmp(lasttitle, "\327\251\327\234\327\225\327\235 \330\263\331\204\330\247\331\205"));

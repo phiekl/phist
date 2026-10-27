@@ -50,3 +50,24 @@ The stored title is `invoicefdp.exe`, with no U+202E bytes (`342 200 256`).
 Inspect the bytes, as the control itself is invisible, and keep setting and
 inspecting the title in one shell command to avoid prompt hooks. The
 sequence suite covers these removals.
+
+## Invisible characters
+
+Application titles drop default-ignorable characters that can make two
+titles look identical while differing to name-matching scripts such as
+`xdotool search --name`. Examples include U+200B ZERO WIDTH SPACE, U+2060
+WORD JOINER, U+FEFF, U+00AD SOFT HYPHEN, Hangul fillers and tag characters
+U+E0000–U+E007F. Subdivision flags using tags consequently appear as a plain
+black flag.
+
+U+200C/U+200D joiners and variation selectors are retained because emoji and
+scripts such as Persian and the Indic scripts need them. This includes
+U+FE00–U+FE0F, U+E0100–U+E01EF and Mongolian selectors U+180B–U+180D/U+180F.
+The exact removal ranges are in `titledrop()`.
+
+```sh
+sh -c 'printf "\033]2;ro\342\200\213ot\a"; sleep 0.5; xprop -id "$WINDOWID" _NET_WM_NAME | od -c'
+```
+
+The title becomes plain `root`, without the ZERO WIDTH SPACE bytes `342 200
+213`. Run the sequence suite for filtering regressions.

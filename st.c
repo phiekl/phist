@@ -3349,8 +3349,21 @@ static int
 titledrop(Rune u)
 {
 	/* Bidi controls: the window list would show the text reordered. */
-	return u == 0x061C || BETWEEN(u, 0x200E, 0x200F) ||
-	       BETWEEN(u, 0x202A, 0x202E) || BETWEEN(u, 0x2066, 0x2069);
+	if (u == 0x061C || BETWEEN(u, 0x200E, 0x200F) ||
+	    BETWEEN(u, 0x202A, 0x202E) || BETWEEN(u, 0x2066, 0x2069))
+		return 1;
+	/*
+	 * Invisible characters (Default_Ignorable_Code_Point) that make the
+	 * text differ from what is shown. The joiners U+200C/U+200D and the
+	 * variation selectors are kept for emoji and scripts that need them.
+	 */
+	return u == 0x00AD || u == 0x034F || BETWEEN(u, 0x115F, 0x1160) ||
+	       BETWEEN(u, 0x17B4, 0x17B5) || u == 0x180E || u == 0x200B ||
+	       BETWEEN(u, 0x2060, 0x2065) || BETWEEN(u, 0x206A, 0x206F) ||
+	       u == 0x3164 || u == 0xFEFF || u == 0xFFA0 ||
+	       BETWEEN(u, 0xFFF0, 0xFFF8) || BETWEEN(u, 0x1BCA0, 0x1BCA3) ||
+	       BETWEEN(u, 0x1D173, 0x1D17A) || BETWEEN(u, 0xE0000, 0xE00FF) ||
+	       BETWEEN(u, 0xE01F0, 0xE0FFF);
 }
 
 /* Bound application titles, remove line breaks and filter explicit bidi
