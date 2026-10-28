@@ -47,6 +47,10 @@
 #define STR_MAX_SIZ   (1 << 20) /* longer DCS/OSC/PM/APC strings are discarded */
 #define TITLE_MAX     512       /* bytes of a window title set by applications */
 #define CWDURI_MAX    16384     /* bytes of an OSC 7 directory URI */
+#define HLINK_MAX      8191     /* fits Glyph.link without enlarging cells */
+#define HLINK_ID_MAX   256
+#define HLINK_BYTES    (4 << 20) /* retained URI and explicit ID strings */
+#define HLINK_BUCKETS  16384    /* hash chains stay short at the slot limit */
 #define ERRESC_BURST  20        /* diagnostics printed before rate limiting */
 #define ERRESC_RATE   5         /* diagnostics per second after a burst */
 #define REPLY_MAX     4096      /* bytes of query replies waiting for the child */
@@ -58,6 +62,9 @@
 /* macros */
 #ifndef ROWVISIT
 #define ROWVISIT() /* tests count row lookups to bound work per update */
+#endif
+#ifndef LINKVISIT
+#define LINKVISIT() /* tests count link lookups to bound work at saturation */
 #endif
 #define IS_SET(flag)		((term.mode & (flag)) != 0)
 #define ISCONTROLC0(c)		(BETWEEN(c, 0, 0x1f) || (c) == 0x7f)
@@ -195,6 +202,7 @@ static void csiparse(void);
 static void csireset(void);
 static void osc_color_response(int, int, int);
 static void osc_cwd(const char *, size_t);
+static void osc_link(char *, size_t);
 static int eschandle(Rune);
 static void strdump(void);
 static void strhandle(void);
@@ -302,7 +310,7 @@ typedef struct {
 	uint64_t fg : 25;
 	uint64_t bg : 25;
 	uint64_t ucolor : 26;
-	uint64_t : 13;
+	uint64_t link : 13;
 } HistoryRun;
 
 /* A run must cost no more than a raw cell, or compact rows lose their benefit. */
@@ -350,6 +358,153 @@ static void searchmarks(void);
 static regex_t *selpatterns; /* compiled selectionpatterns */
 static int nselpatterns;
 
+static struct {
+	struct {
+		char *uri, *name;
+		uint64_t refs, hash;
+		int next, overlay; /* next hash-chain entry, or next free slot */
+	} slots[HLINK_MAX + 1];
+	int buckets[HLINK_BUCKETS];
+	int allocated, free, used, seeded;
+	uint64_t seed;
+	size_t bytes;
+} hlinks;
+
+/* Output must not be able to prepare targets sharing a bucket, which would
+ * make every lookup walk a long chain. The clock only covers a missing
+ * /dev/urandom. */
+static void
+linkseed(void)
+{
+	struct timespec now;
+	int fd = open("/dev/urandom", O_RDONLY);
+	ssize_t got = fd < 0 ? -1 : read(fd, &hlinks.seed, sizeof(hlinks.seed));
+
+	if (fd >= 0)
+		close(fd);
+	if (got != sizeof(hlinks.seed)) {
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		hlinks.seed = (uint64_t)now.tv_nsec << 32 ^ now.tv_sec ^ getpid();
+	}
+	hlinks.seeded = 1;
+}
+
+/* Include the URI's terminating NUL to separate it from the optional ID. The
+ * last steps matter: multiplying only carries bits upwards, so a bucket taken
+ * straight from the low bits would ignore most of the seed. */
+static uint64_t
+linkhash(const char *uri, const char *name)
+{
+	const uchar *p;
+	uint64_t hash;
+
+	if (!hlinks.seeded)
+		linkseed();
+	/* 64-bit FNV-1a, seeded: its offset basis, then its prime for each byte. */
+	hash = hlinks.seed ^ UINT64_C(14695981039346656037);
+	for (p = (const uchar *)uri; *p; p++)
+		hash = (hash ^ *p) * UINT64_C(1099511628211);
+	hash *= UINT64_C(1099511628211);
+	if (name)
+		for (p = (const uchar *)name; *p; p++)
+			hash = (hash ^ *p) * UINT64_C(1099511628211);
+	/* MurmurHash3's fmix64 finalizer: its published multipliers. */
+	hash = (hash ^ (hash >> 33)) * UINT64_C(0xff51afd7ed558ccd);
+	hash = (hash ^ (hash >> 33)) * UINT64_C(0xc4ceb9fe1a85ec53);
+	return hash ^ (hash >> 33);
+}
+
+static int
+linkfind(const char *uri, const char *name, uint64_t hash)
+{
+	int id;
+
+	for (id = hlinks.buckets[hash & (HLINK_BUCKETS - 1)]; id;
+	     id = hlinks.slots[id].next) {
+		LINKVISIT();
+		if (hlinks.slots[id].hash == hash && !strcmp(uri, hlinks.slots[id].uri) &&
+		    ((!name && !hlinks.slots[id].name) ||
+		     (name && hlinks.slots[id].name && !strcmp(name, hlinks.slots[id].name))))
+			return id;
+	}
+	return 0;
+}
+
+/* Only owned cells, history and cursor attributes count; decoded scratch
+ * rows borrow their references. Reclaim a target as its last owner goes. */
+static void
+linkref(unsigned int id, int delta)
+{
+	int *p;
+
+	if (!id)
+		return;
+	if (delta > 0) {
+		hlinks.slots[id].refs += delta;
+		return;
+	}
+	hlinks.slots[id].refs -= -delta;
+	if (hlinks.slots[id].refs)
+		return;
+	for (p = &hlinks.buckets[hlinks.slots[id].hash & (HLINK_BUCKETS - 1)];
+	     *p != id; p = &hlinks.slots[*p].next)
+		;
+	*p = hlinks.slots[id].next;
+	hlinks.bytes -= strlen(hlinks.slots[id].uri) + 1;
+	if (hlinks.slots[id].name)
+		hlinks.bytes -= strlen(hlinks.slots[id].name) + 1;
+	free(hlinks.slots[id].uri);
+	free(hlinks.slots[id].name);
+	memset(&hlinks.slots[id], 0, sizeof(hlinks.slots[id]));
+	hlinks.slots[id].next = hlinks.free;
+	hlinks.free = id;
+	hlinks.used--;
+}
+
+static void
+linkset(Glyph *g, unsigned int id)
+{
+	if (!id)
+		g->mode &= ~ATTR_LINKSTART;
+	if (g->link == id)
+		return;
+	linkref(id, 1);
+	linkref(g->link, -1);
+	g->link = id;
+}
+
+static void
+linkcells(const Glyph *line, int cols, int delta)
+{
+	int x;
+	for (x = 0; x < cols; x++)
+		linkref(line[x].link, delta);
+}
+
+static void
+linkmove(Line dst, Line src, int cols)
+{
+	linkcells(src, cols, 1);
+	linkcells(dst, cols, -1);
+	memmove(dst, src, cols * sizeof(Glyph));
+}
+
+static void
+sb_free(HistoryLine *row)
+{
+	HistoryRun *runs = row->cells;
+	int r, start = 0;
+	if (!row->runs)
+		linkcells(row->cells, row->cols, -1);
+	else
+		for (r = 0; r < row->runs; r++) {
+			linkref(runs[r].link, -(int)(runs[r].end - start));
+			start = runs[r].end;
+		}
+	free(row->cells);
+	*row = (HistoryLine){0};
+}
+
 static int
 sb_phys_index(int logical_idx)
 {
@@ -369,7 +524,7 @@ sb_padglyph(void)
 static int
 sb_ispadding(const Glyph *glyph)
 {
-	return glyph->u == ' ' && glyph->mode == 0 && glyph->bg == defaultbg;
+	return glyph->u == ' ' && glyph->mode == 0 && glyph->bg == defaultbg && !glyph->link;
 }
 
 /* Number of leading content cells; the trailing padding is recreated. */
@@ -399,6 +554,7 @@ sb_pack(const Glyph *line, int cols)
 	size_t rawsize = (size_t)cols * sizeof(Glyph), size;
 	int x, n = 1, r = 0;
 
+	linkcells(line, cols, 1);
 	for (x = 1; x < cols; x++) {
 		if (ATTRCMP(line[x - 1], line[x]))
 			n++;
@@ -421,7 +577,7 @@ sb_pack(const Glyph *line, int cols)
 				runs[r++].end = x;
 			runs[r] = (HistoryRun){ .mode = line[x].mode,
 				.fg = line[x].fg, .bg = line[x].bg,
-				.ucolor = line[x].ucolor };
+				.ucolor = line[x].ucolor, .link = line[x].link };
 		}
 	}
 	runs[r].end = cols;
@@ -443,7 +599,7 @@ sb_unpack(const HistoryLine *row, Line line, int cols)
 	} else {
 		for (r = 0; x < stored; r++) {
 			attr = (Glyph){ .mode = runs[r].mode, .fg = runs[r].fg,
-				.bg = runs[r].bg, .ucolor = runs[r].ucolor };
+				.bg = runs[r].bg, .ucolor = runs[r].ucolor, .link = runs[r].link };
 			end = MIN(stored, runs[r].end);
 			for (; x < end; x++) {
 				line[x] = attr;
@@ -480,8 +636,7 @@ sb_evict(Scrollback *history)
 {
 	if (!history->len)
 		return;
-	free(history->buf[history->head].cells);
-	history->buf[history->head] = (HistoryLine){0};
+	sb_free(&history->buf[history->head]);
 	history->head = (history->head + 1) % history->cap;
 	history->base++;
 	history->len--;
@@ -592,8 +747,7 @@ sb_clear(void)
 	for (i = 0; i < sb.len; i++) {
 		p = sb_phys_index(i);
 		if (sb.buf[p].cells) {
-			free(sb.buf[p].cells);
-			sb.buf[p] = (HistoryLine){0};
+			sb_free(&sb.buf[p]);
 		}
 	}
 
@@ -791,11 +945,13 @@ sb_pop_screen(int start, int loaded, int new_cols)
 	new_cols = MIN(new_cols, term.col);
 	for (i = 0; i < sb.len - start; i++) {
 		p = sb_phys_index(start + i);
-		if (i < loaded)
+		if (i < loaded) {
+			linkcells(term.line[i], new_cols, -1);
 			sb_unpack(&sb.buf[p], term.line[i], new_cols);
+			linkcells(term.line[i], new_cols, 1);
+		}
 
-		free(sb.buf[p].cells);
-		sb.buf[p] = (HistoryLine){0};
+		sb_free(&sb.buf[p]);
 	}
 
 	sb.len = start;
@@ -860,6 +1016,7 @@ emptyline(void)
 		empty[i] = term.c.attr;
 		empty[i].u = ' ';
 		empty[i].mode = 0;
+		empty[i].link = 0;
 	}
 	return empty;
 }
@@ -1435,7 +1592,7 @@ urlupdate(void)
 		line = renderline(y);
 		offsets[y - top] = length;
 		for (x = 0; x < term.col; x++)
-			text[length++] = !(line[x].mode & ATTR_WDUMMY) &&
+			text[length++] = !line[x].link && !(line[x].mode & ATTR_WDUMMY) &&
 				BETWEEN(line[x].u, 1, 127) ? line[x].u : ' ';
 		if (!(line[term.col - 1].mode & ATTR_WRAP))
 			text[length++] = '\n';
@@ -1469,6 +1626,30 @@ urlupdate(void)
 	free(text);
 	free(offsets);
 
+	/* Explicit links override text detection, including spaces and both
+	 * halves of wide glyphs. A shared OSC 8 id gets one overlay identity. */
+	if (hlinks.used) {
+		for (i = 1; i <= hlinks.allocated; i++)
+			hlinks.slots[i].overlay = 0;
+		for (y = 0; y < term.row; y++) {
+			line = renderline(y);
+			for (x = 0; x < term.col; x++) {
+				if (!(i = line[x].link))
+					continue;
+				if (!hlinks.slots[i].overlay) {
+					if (urls.count == urls.capacity) {
+						urls.capacity = urls.capacity ? 2 * urls.capacity : 16;
+						urls.targets = xrealloc(urls.targets,
+						                        urls.capacity * sizeof(*urls.targets));
+					}
+					urls.targets[urls.count++] = xstrdup(hlinks.slots[i].uri);
+					hlinks.slots[i].overlay = urls.count;
+				}
+				urls.cells[(size_t)y * term.col + x] = hlinks.slots[i].overlay;
+			}
+		}
+	}
+
 	for (y = 0; y < term.row; y++)
 		if (memcmp(urls.cells + (size_t)y * term.col, urls.old + (size_t)y * term.col,
 		           term.col * sizeof(*urls.cells)))
@@ -1497,6 +1678,64 @@ tgeturl(int col, int row)
 	int id = turl(col, row);
 
 	return id ? xstrdup(urls.targets[id - 1]) : NULL;
+}
+
+int
+thyperlink(int col, int row)
+{
+	Line line;
+	return BETWEEN(col, 0, term.col - 1) && BETWEEN(row, 0, term.row - 1) &&
+	       (line = viewline(row)) && line[col].link;
+}
+
+/* Visible bounds of this contiguous label, following soft wraps. */
+void
+thyperlinkbounds(int *left, int *top, int *right, int *bottom)
+{
+	Line line, previous;
+	unsigned int id;
+	int col = *left, row = *top, last, first = 1;
+
+	*right = col;
+	*bottom = row;
+	if (!thyperlink(col, row))
+		return;
+	line = viewline(row);
+	id = line[col].link;
+	for (;;) {
+		while (col > 0 && !(line[col].mode & ATTR_LINKSTART) &&
+		       line[col - 1].link == id)
+			--col;
+		if ((line[col].mode & ATTR_LINKSTART) || col || !row ||
+		    !(previous = viewline(row - 1)) ||
+		    !(previous[term.col - 1].mode & ATTR_WRAP))
+			break;
+		last = term.col - 1 - !!(previous[term.col - 1].mode & ATTR_WPAD);
+		if (last < 0 || previous[last].link != id)
+			break;
+		--row;
+		col = last;
+		line = previous;
+	}
+	*left = *right = col;
+	*top = row;
+	for (;;) {
+		last = term.col - 1 - !!(line[term.col - 1].mode & ATTR_WPAD);
+		while (col <= last && line[col].link == id &&
+		       (first || !(line[col].mode & ATTR_LINKSTART))) {
+			first = 0;
+			*left = MIN(*left, col);
+			*right = MAX(*right, col);
+			col++;
+		}
+		*bottom = row;
+		if (col <= last || !(line[term.col - 1].mode & ATTR_WRAP) ||
+		    row + 1 >= term.row || !(line = viewline(row + 1)) ||
+		    line[0].link != id || (line[0].mode & ATTR_LINKSTART))
+			break;
+		row++;
+		col = 0;
+	}
 }
 
 void
@@ -1536,6 +1775,7 @@ sb_preserve_screen(void)
 {
 	int y, last = term.row - 1;
 	HistoryLine *hl;
+	HistoryLine old;
 	Line line;
 	uint64_t oldstart = sb_view_start();
 
@@ -1550,8 +1790,9 @@ sb_preserve_screen(void)
 		line = xmalloc(hl->cols * sizeof(Glyph));
 		sb_unpack(hl, line, hl->cols);
 		line[hl->cols - 1].mode &= ~ATTR_WRAP;
-		free(hl->cells);
+		old = *hl;
 		*hl = sb_pack(line, hl->cols);
+		sb_free(&old);
 		free(line);
 		urls.dirty = 1;
 	}
@@ -2647,8 +2888,12 @@ tcursor(int mode)
 	int alt = IS_SET(MODE_ALTSCREEN);
 
 	if (mode == CURSOR_SAVE) {
+		linkref(term.c.attr.link, 1);
+		linkref(term.saved[alt].attr.link, -1);
 		term.saved[alt] = term.c;
 	} else if (mode == CURSOR_LOAD) {
+		linkref(term.saved[alt].attr.link, 1);
+		linkref(term.c.attr.link, -1);
 		term.c = term.saved[alt];
 		tmoveto(term.c.x, term.c.y);
 	}
@@ -2661,6 +2906,7 @@ tresetstate(void)
 	uint i;
 
 	xsetcwd(NULL);
+	linkref(term.c.attr.link, -1);
 	term.c = (TCursor){{
 		.mode = ATTR_NULL,
 		.fg = defaultfg,
@@ -2716,8 +2962,11 @@ tswapscreen(void)
 
 	search.refresh = 1;
 
-	if (!alt)
+	if (!alt) {
+		linkref(term.c.attr.link, 1);
+		linkref(term.mainc.attr.link, -1);
 		term.mainc = term.c;
+	}
 	/* Keep showing the same history rows; the main screen moves past them. */
 	if (sb.view_offset > 0)
 		sb.view_offset = IS_SET(MODE_ALTSCREEN) ?
@@ -2979,17 +3228,23 @@ tsetchar(Rune u, const Glyph *attr, int x, int y)
 		if (x+1 < term.col) {
 			term.line[y][x+1].u = ' ';
 			term.line[y][x+1].mode &= ~ATTR_WDUMMY;
+			linkset(&term.line[y][x+1], 0);
 		}
 	} else if (term.line[y][x].mode & ATTR_WDUMMY) {
 		if (x > 0) {
 			term.line[y][x-1].u = ' ';
 			term.line[y][x-1].mode &= ~ATTR_WIDE;
+			linkset(&term.line[y][x-1], 0);
 		}
 	}
 
 	tdirtyscreen(y, y);
+	linkref(attr->link, 1);
+	linkref(term.line[y][x].link, -1);
 	term.line[y][x] = *attr;
 	term.line[y][x].u = u;
+	if (attr == &term.c.attr)
+		term.c.attr.mode &= ~ATTR_LINKSTART;
 	urls.dirty = 1;
 }
 
@@ -3020,6 +3275,7 @@ tclearregion(int x1, int y1, int x2, int y2)
 			gp->bg = term.c.attr.bg;
 			gp->mode = 0;
 			gp->u = ' ';
+			linkset(gp, 0);
 		}
 	}
 }
@@ -3027,7 +3283,7 @@ tclearregion(int x1, int y1, int x2, int y2)
 void
 tdeletechar(int n)
 {
-	int dst, src, size;
+	int dst, src, size, x;
 	Glyph *line;
 
 	LIMIT(n, 0, term.col - term.c.x);
@@ -3037,7 +3293,14 @@ tdeletechar(int n)
 	size = term.col - src;
 	line = term.line[term.c.y];
 
-	memmove(&line[dst], &line[src], size * sizeof(Glyph));
+	/* Keep the surviving suffix of an anonymous label separate from a
+	 * preceding label sharing its target, even if its first glyph is cut. */
+	if (size && line[src].link)
+		for (x = dst; x < src; x++)
+			if (line[x].link == line[src].link &&
+			    (line[x].mode & ATTR_LINKSTART))
+				line[src].mode |= ATTR_LINKSTART;
+	linkmove(&line[dst], &line[src], size);
 	tclearregion(term.col-n, term.c.y, term.col-1, term.c.y);
 }
 
@@ -3054,7 +3317,7 @@ tinsertblank(int n)
 	size = term.col - dst;
 	line = term.line[term.c.y];
 
-	memmove(&line[dst], &line[src], size * sizeof(Glyph));
+	linkmove(&line[dst], &line[src], size);
 	tclearregion(src, term.c.y, dst - 1, term.c.y);
 }
 
@@ -3778,6 +4041,78 @@ osc_cwd(const char *uri, size_t len)
 	xsetcwd(uri);
 }
 
+/* OSC 8 changes a cell attribute independently of SGR. Invalid opens close
+ * the old link, so rejected data cannot relabel subsequent text with it. */
+static void
+osc_link(char *text, size_t len)
+{
+	char *uri, *p, *name = NULL, *end;
+	size_t urilen, bytes;
+	uint64_t hash;
+	int id, bucket;
+
+	linkset(&term.c.attr, 0);
+	if (memchr(text, '\0', len) || !(uri = memchr(text, ';', len)))
+		return;
+	*uri++ = '\0';
+	if (!(urilen = len - (uri - text)) || urilen > URLTARGET_MAX)
+		return;
+	/* URI schemes and encoded targets are ASCII; never hide controls or
+	 * whitespace inside the URL shown to the user. */
+	if (!isalpha((uchar)*uri))
+		return;
+	for (p = uri + 1; *p && (isalnum((uchar)*p) || strchr("+.-", *p)); p++)
+		;
+	if (*p != ':')
+		return;
+	for (p = uri; *p; p++) {
+		if (!BETWEEN((uchar)*p, 0x21, 0x7e))
+			return;
+		if (*p == '%' && (!p[1] || !p[2] ||
+		                 !isxdigit((uchar)p[1]) || !isxdigit((uchar)p[2])))
+			return;
+	}
+	for (p = text; *p; p = end) {
+		end = strchr(p, ':');
+		if (end)
+			*end++ = '\0';
+		else
+			end = p + strlen(p);
+		if (!strncmp(p, "id=", 3))
+			name = p + 3;
+	}
+	if (name && strlen(name) > HLINK_ID_MAX)
+		return;
+	if (name && !*name)
+		name = NULL;
+	hash = linkhash(uri, name);
+	if ((id = linkfind(uri, name, hash))) {
+		linkset(&term.c.attr, id);
+		if (!name)
+			term.c.attr.mode |= ATTR_LINKSTART;
+		return;
+	}
+	bytes = urilen + 1 + (name ? strlen(name) + 1 : 0);
+	if (hlinks.bytes + bytes > HLINK_BYTES ||
+	    (!hlinks.free && hlinks.allocated == HLINK_MAX))
+		return;
+	if ((id = hlinks.free))
+		hlinks.free = hlinks.slots[id].next;
+	else
+		id = ++hlinks.allocated;
+	hlinks.slots[id].uri = xstrdup(uri);
+	hlinks.slots[id].name = name ? xstrdup(name) : NULL;
+	hlinks.slots[id].hash = hash;
+	bucket = hash & (HLINK_BUCKETS - 1);
+	hlinks.slots[id].next = hlinks.buckets[bucket];
+	hlinks.buckets[bucket] = id;
+	hlinks.bytes += bytes;
+	hlinks.used++;
+	linkset(&term.c.attr, id);
+	if (!name)
+		term.c.attr.mode |= ATTR_LINKSTART;
+}
+
 void
 strhandle(void)
 {
@@ -3791,6 +4126,9 @@ strhandle(void)
 
 	term.esc &= ~(ESC_STR_END|ESC_STR);
 	if (strescseq.overflow) {
+		if (strescseq.type == ']' && strescseq.len >= 2 &&
+		    !memcmp(strescseq.buf, "8;", 2))
+			linkset(&term.c.attr, 0);
 		erresc("erresc: ESC%c string longer than %d bytes ignored\n",
 		       strescseq.type, STR_MAX_SIZ);
 		return;
@@ -3803,6 +4141,12 @@ strhandle(void)
 		osc_cwd(strescseq.buf + 2, strescseq.len - 2);
 		return;
 	}
+	if (strescseq.type == ']' && strescseq.len >= 2 &&
+	    !memcmp(strescseq.buf, "8;", 2)) {
+		strescseq.buf[strescseq.len] = '\0';
+		osc_link(strescseq.buf + 2, strescseq.len - 2);
+		return;
+	}
 	strparse();
 	par = (narg = strescseq.narg) ? atoi(strescseq.args[0]) : 0;
 
@@ -3810,6 +4154,9 @@ strhandle(void)
 	case ']': /* OSC -- Operating System Command */
 		switch (par) {
 		case 7: /* malformed directory report without the OSC 7 separator */
+			return;
+		case 8: /* malformed hyperlink report without its separators */
+			linkset(&term.c.attr, 0);
 			return;
 		case 0:
 			if (narg > 1) {
@@ -4639,7 +4986,7 @@ check_control_code:
 	}
 
 	if (IS_SET(MODE_INSERT) && term.c.x+width < term.col) {
-		memmove(gp+width, gp, (term.col - term.c.x - width) * sizeof(Glyph));
+		linkmove(gp+width, gp, term.col - term.c.x - width);
 		gp->mode &= ~ATTR_WIDE;
 	}
 
@@ -4672,9 +5019,11 @@ check_control_code:
 			if ((gp[1].mode & ATTR_WIDE) && term.c.x+2 < term.col) {
 				gp[2].u = ' ';
 				gp[2].mode &= ~ATTR_WDUMMY;
+				linkset(&gp[2], 0);
 			}
 			gp[1].u = '\0';
 			gp[1].mode = ATTR_WDUMMY;
+			linkset(&gp[1], gp->link);
 		}
 	}
 	if (term.c.x+width < term.col) {
@@ -4800,8 +5149,10 @@ tresize(int col, int row)
 
 	/* term.alt is the alternate screen here; it is copied once resized. */
 	if (term.line) {
-		for (i = 0; i < term.row; i++)
+		for (i = 0; i < term.row; i++) {
+			linkcells(term.line[i], term.col, -1);
 			free(term.line[i]);
+		}
 		free(term.line);
 		free(term.dirty);
 		oldalt = term.alt;
@@ -4826,10 +5177,12 @@ tresize(int col, int row)
 			term.line[i][j] = term.c.attr;
 			term.line[i][j].u = ' ';
 			term.line[i][j].mode = 0;
+			term.line[i][j].link = 0;
 
 			term.alt[i][j] = term.c.attr;
 			term.alt[i][j].u = ' ';
 			term.alt[i][j].mode = 0;
+			term.alt[i][j].link = 0;
 		}
 	}
 	if (oldalt) {
@@ -4837,9 +5190,11 @@ tresize(int col, int row)
 			if (BETWEEN(i - altshift, 0, row - 1)) {
 				memcpy(term.alt[i - altshift], oldalt[i],
 				       MIN(col, old_col) * sizeof(Glyph));
+				linkcells(term.alt[i - altshift], MIN(col, old_col), 1);
 				if (col > old_col)
 					term.alt[i - altshift][old_col - 1].mode &= ~ATTR_WRAP;
 			}
+			linkcells(oldalt[i], old_col, -1);
 			free(oldalt[i]);
 		}
 		free(oldalt);

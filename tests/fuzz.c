@@ -166,7 +166,7 @@ gen_csi(char *out, size_t *len)
 static void
 gen_osc(char *out, size_t *len)
 {
-	static const int codes[] = {0, 1, 2, 4, 7, 10, 11, 12, 52, 104, 110, 111, 112};
+	static const int codes[] = {0, 1, 2, 4, 7, 8, 10, 11, 12, 52, 104, 110, 111, 112};
 	static const char b64[] = "ABCabc012+/\n\r\t\x01\xff=";
 	char *p = out;
 	int code = codes[rndmod(LEN(codes))], i;
@@ -175,6 +175,11 @@ gen_osc(char *out, size_t *len)
 	*p++ = ']';
 	p += sprintf(p, "%d;", code);
 	switch (code) {
+	case 8:
+		p += sprintf(p, "id=%u;", (unsigned)rndmod(8));
+		if (rnd() % 3)
+			p += sprintf(p, "https://example.com/%u;path?q=x#part", (unsigned)rndmod(16));
+		break;
 	case 52:
 		/* OSC 52 is enabled below to also exercise base64dec(). */
 		*p++ = 's';

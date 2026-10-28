@@ -12,7 +12,8 @@
 #define DEFAULT(a, b)		(a) = (a) ? (a) : (b)
 #define LIMIT(x, a, b)		(x) = (x) < (a) ? (a) : (x) > (b) ? (b) : (x)
 #define ATTRCMP(a, b)		((a).mode != (b).mode || (a).fg != (b).fg || \
-				(a).bg != (b).bg || (a).ucolor != (b).ucolor)
+				(a).bg != (b).bg || (a).ucolor != (b).ucolor || \
+				(a).link != (b).link)
 #define TIMEDIFF(t1, t2)	((t1.tv_sec-t2.tv_sec)*1000 + \
 				(t1.tv_nsec-t2.tv_nsec)/1E6)
 #define MODBIT(x, set, bit)	((set) ? ((x) |= (bit)) : ((x) &= ~(bit)))
@@ -42,6 +43,7 @@ enum glyph_attribute {
 	ATTR_URL        = 1 << 12,
 	ATTR_USTYLE     = 7 << 13,
 	ATTR_WPAD       = 1 << 16, /* padding before a wide glyph on the next row */
+	ATTR_LINKSTART  = 1 << 17, /* first glyph of an anonymous OSC 8 label */
 	ATTR_BOLD_FAINT = ATTR_BOLD | ATTR_FAINT,
 };
 
@@ -73,14 +75,15 @@ typedef uint_least32_t Rune;
 typedef struct {
 	/* Unicode needs 21 bits; colors need RGB plus the truecolor flag. */
 	uint64_t u : 21;
-	uint64_t mode : 18;   /* attribute flags; one spare bit */
+	uint64_t mode : 18;   /* attribute flags */
 	uint64_t fg : 25;
 	uint64_t bg : 25;
 	uint64_t ucolor : 26; /* indexed/RGB underline color or UCOLOR_DEFAULT */
-	uint64_t : 13;
+	uint64_t link : 13; /* explicit OSC 8 target, zero for ordinary text */
 } Glyph;
 
-/* Keep underline colors and reflow flags within the original cell budget. */
+/* Keep underline colors, reflow flags and links within the original cell
+ * budget. */
 typedef char glyph_size_must_be_16[(sizeof(Glyph) == 16) ? 1 : -1];
 
 typedef Glyph *Line;
@@ -129,6 +132,8 @@ int selected(int, int);
 char *getsel(void);
 int turl(int, int);
 char *tgeturl(int, int);
+int thyperlink(int, int);
+void thyperlinkbounds(int *, int *, int *, int *);
 void tflashurl(int, int, const char *);
 int turlflashed(int, int);
 void tclearurlflash(void);

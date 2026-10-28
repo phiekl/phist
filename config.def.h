@@ -583,3 +583,11 @@ const char urlchars[] =
 
 /* Reverse the copied URL for this many ms (0 disables copy feedback). */
 static unsigned int urlflashtimeout = 150;
+
+/* OSC 8 target bar and copy-flash colors (0xRRGGBB).
+ * Fade opacity at the window edges ranges from 0 to 1. */
+static unsigned int urlboxcolor = 0x2563eb;
+static unsigned int urlboxtextcolor = 0xffd75f;
+static unsigned int urlboxflashcolor = 0xffd75f;
+static unsigned int urlboxflashtextcolor = 0x2563eb;
+static double urlboxfadeopacity = 0.05;

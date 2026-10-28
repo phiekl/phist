@@ -199,6 +199,18 @@ The hostname and percent encoding are preserved. Reports are limited to
 a valid report and is removed by an empty report or terminal reset.
 phist never changes directory in response to OSC 7. Consumers must check
 the host before using the decoded path as a local directory.
+.SH HYPERLINKS
+Click an OSC 8 hyperlink label to reveal its URI in a fading bar below the
+label, or above it when there is no room below.
+Click the displayed URI or press Enter to copy it to PRIMARY and CLIPBOARD.
+The target flashes for urlflashtimeout (150 ms by default), then the bar
+closes. Disabling copy feedback closes it immediately.
+Clicking elsewhere dismisses the bar. Escape dismisses it without sending
+input. Other input keys dismiss it and run normally; modifier keys alone
+leave it open.
+Long targets scroll horizontally with the wheel, Up/Down or Page Up/Page Down.
+Selecting a label copies its visible text. Automatically detected URLs
+copy their targets directly when clicked.
 .SH CUSTOMIZATION
 .B phist
 can be customized by creating a custom config.h and (re)compiling the source

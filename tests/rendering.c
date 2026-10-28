@@ -392,6 +392,27 @@ main(void)
 		xdrawline(line, 0, 0, LEN(painted));
 		assert(painted[0] == colors[defaultbg].pixel);
 		assert(painted[2048] == colors[defaultfg].pixel);
+		/* Explicit link labels are blue and underlined on their original
+		 * background, retaining their attributes in stored cells. URL feedback still
+		 * inverts the link's foreground and background. */
+		line = testrender_text(20, "\033[5;7;8m\033]8;;https://example.com\033\\label\033]8;;\033\\\033[0m plain");
+		failalloc = 0;
+		win.mode |= MODE_BLINK;
+		xdrawline(line, 0, 0, 20);
+		for (i = 0; i < 5; i++) {
+			assert(painted[i] == 0x2462ea && backgrounds[i] == colors[defaultbg].pixel);
+			assert(line[i].mode & ATTR_REVERSE);
+			assert(line[i].mode & ATTR_BLINK);
+		}
+		assert(stroke == 0x2462ea);
+		win.mode |= MODE_HIDE;
+		xdrawcursor(0, 0, line[0], 0, 0, line[0]);
+		assert(painted[0] == 0x2462ea && backgrounds[0] == colors[defaultbg].pixel);
+		win.mode &= ~MODE_HIDE;
+		tflashurl(0, 0, "https://example.com");
+		xdrawline(line, 0, 0, 20);
+		assert(painted[0] == colors[defaultbg].pixel && backgrounds[0] == 0x2462ea);
+		tclearurlflash();
 		/* Search colors stay visible over reversed, concealed and blinking
 		 * text, and never modify the terminal's stored glyph attributes.
 		 * The current match, the last, is bright yellow; others in view

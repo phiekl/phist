@@ -1153,6 +1153,13 @@ static int pasteshift;
 #define pasteblack pastevalues[PASTE_BLACK]
 #define pastewhite pastevalues[PASTE_WHITE]
 
+static uint
+pastecellcolor(int index)
+{
+	const XRenderColor *color = &pastevalues[index];
+	return TRUECOLOR(color->red >> 8, color->green >> 8, color->blue >> 8);
+}
+
 static Color *
 pastecolor(int index)
 {

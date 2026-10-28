@@ -241,6 +241,52 @@ XRenderFillRectangles(Display *d, int op, Picture p, const XRenderColor *c,
 		XRenderFillRectangle(d, op, p, c, r[i].x, r[i].y, r[i].width, r[i].height);
 }
 
+/* Bars fading from left to right. */
+static struct {
+	int x, y, w, h, start, end;
+	XRenderColor left, right;
+} fades[8], fadegradient;
+static int nfades, livegradients;
+
+Picture
+XRenderCreateLinearGradient(Display *d, const XLinearGradient *line,
+                            const XFixed *stops, const XRenderColor *colors, int n)
+{
+	assert(n == 2 && !livegradients);
+	assert(stops[0] == 0 && stops[1] == XDoubleToFixed(1));
+	assert(!line->p1.y && !line->p2.y && line->p1.x < line->p2.x);
+	fadegradient.start = XFixedToDouble(line->p1.x);
+	fadegradient.end = XFixedToDouble(line->p2.x);
+	fadegradient.left = colors[0];
+	fadegradient.right = colors[1];
+	livegradients++;
+	return 1;
+}
+
+void
+XRenderComposite(Display *d, int op, Picture src, Picture mask, Picture dst,
+                 int sx, int sy, int mx, int my, int x, int y, unsigned int w, unsigned int h)
+{
+	assert(op == PictOpOver && src == 1 && livegradients && nfades < LEN(fades));
+	assert(!presenting || dst == vbell.buf || dst == xw.win);
+	assert(x >= 0 && y >= 0 && x + w <= win.w && y + h <= win.h);
+	/* The gradient lies in window coordinates. */
+	assert(sx == x && sy == y);
+	fades[nfades] = fadegradient;
+	fades[nfades].x = x;
+	fades[nfades].y = y;
+	fades[nfades].w = w;
+	fades[nfades].h = h;
+	nfades++;
+}
+
+void
+XRenderFreePicture(Display *d, Picture p)
+{
+	assert(p == 1 && livegradients);
+	livegradients--;
+}
+
 void
 XftDrawGlyphFontSpec(XftDraw *d, const XftColor *color, const XftGlyphFontSpec *s, int n)
 {
@@ -2527,7 +2573,7 @@ presentframe(void)
 {
 	memset(painted, 0, sizeof(painted));
 	memset(ink, 0, sizeof(ink));
-	glyphs = nrects = nblends = 0;
+	glyphs = nrects = nblends = nfades = 0;
 	xfinishdraw();
 }
 
@@ -2908,6 +2954,342 @@ testsearchstatus(void)
 	press(XK_Escape, 0);
 }
 
+static void
+testhyperlinkbox(int fd)
+{
+	static const char target[] = "https://example.com/actual;target?q=1#part";
+	char longuri[2049];
+	XEvent e = { .xbutton = { .type = ButtonPress, .button = Button1, .time = 200 } };
+	int before, fault, offset, cols, rows;
+
+	resizewindow(80, 10);
+	tresize(80, 10);
+	testmouse_put("\033[H\033[2J\033]8;id=project;https://example.com/actual;target?q=1#part\033\\"
+	              "Project\033]8;;\033\\");
+	drag(0, 0, 6, 0);
+	assert(!urlbox.text && !strcmp(xsel.primary, "Project"));
+	before = owned;
+	clickat(1, 0);
+	assert(urlbox.text && !strcmp(urlbox.text, target));
+	assert(urlbox.anchorrow == 0 && urlbox.anchorendrow == 0);
+	assert(urlbox.anchorcol == 0 && urlbox.y == win.ch);
+	assert(owned == before && !paste.state);
+	expect(fd, NULL);
+
+	/* Reuse the presentation pixmap, including its allocation-failure
+	 * fallback; never draw into the terminal buffer. */
+	for (fault = 0; fault < 4; fault++) {
+		vbellfree();
+		failpixmap = fault == 0;
+		faildraw = fault == 1;
+		failpicture = fault == 2;
+		presentframe();
+		assert(dialogrow("Link target") < 0 && dialogrow("Esc") < 0);
+		assert(dialogrow(target) >= 0);
+		/* Below the label at the left edge: solid, then a single fade. */
+		assert(urlbox.col == 0 && urlbox.width == strlen(target));
+		assert(painted[dialogrow(target)][0] == 'h');
+		assert(ink[dialogrow(target)][0] == pixel(PASTE_GOLD));
+		{
+			int k, solid = 0, underline = 0, end = (strlen(target) + 1) * win.cw;
+
+			for (k = 0; k < nblends; k++) {
+				solid += blends[k].alpha == 0xffff && !blends[k].x &&
+				         blends[k].w == end && blends[k].y == urlbox.y &&
+				         blends[k].h == urlbox.height &&
+				         blends[k].blue == pastevalues[PASTE_BLUE].blue;
+				underline += blends[k].alpha == 0xffff && blends[k].h == 1 &&
+				             blends[k].blue == pastevalues[PASTE_GOLD].blue &&
+				             blends[k].w == strlen(target) * win.cw;
+			}
+			assert(solid == 1 && underline == 1);
+			assert(nfades == 1 && !livegradients);
+			assert(fades[0].x == end && fades[0].start == end);
+			assert(fades[0].end == win.w && fades[0].x + fades[0].w == win.w);
+			assert(fades[0].y == urlbox.y && fades[0].h == urlbox.height);
+			assert(fades[0].left.alpha == 0xffff && fades[0].right.alpha == 0x0ccc);
+		}
+		assert(framepixels[xw.buf] == 0x204060);
+		assert(maindrawable == xw.buf && !pasteshift);
+	}
+	failpixmap = faildraw = failpicture = 0;
+	offset = testmouse_offset();
+	before = requests;
+	mouseat(ButtonPress, Button2, 0, 0);
+	mouseat(ButtonRelease, Button2, 0, 0);
+	assert(requests == before && !urlbox.text);
+	clickat(1, 0);
+	assert(urlbox.text && !strcmp(urlbox.text, target));
+	before = owned;
+	clickat(79, 0);
+	assert(!urlbox.text && owned == before);
+	clickat(1, 0);
+	assert(urlbox.text && !strcmp(urlbox.text, target));
+	clickat(1, 0);
+	assert(!urlbox.text && owned == before);
+	clickat(1, 0);
+	assert(urlbox.text && !strcmp(urlbox.text, target));
+	lookuptext = "";
+	press(XK_Shift_L, ShiftMask);
+	lookuptext = "x";
+	expect(fd, NULL);
+	assert(urlbox.text);
+
+	/* Clicking the URI copies it, flashes with inverse colors,
+	 * then dismisses the bar. Output can replace its original label. */
+	e.xbutton.x = borderpx + urlbox.col * win.cw + 1;
+	e.xbutton.y = urlbox.y + 1;
+	bpress(&e);
+	e.type = ButtonRelease;
+	brelease(&e);
+	assert(urlbox.flash && !strcmp(xsel.primary, target) && !strcmp(xsel.clipboard, target));
+	{
+		struct timespec now = urlbox.flashed;
+		int k, field = 0, row, col = urlbox.col;
+		assert(urlbox.flash && urlflashremaining(now) == urlflashtimeout);
+		now.tv_nsec += 100000000;
+		if (now.tv_nsec >= 1000000000) {
+			now.tv_nsec -= 1000000000;
+			now.tv_sec++;
+		}
+		assert(urlflashremaining(now) == urlflashtimeout - 100);
+		assert(urlbox.text && urlbox.flash);
+		presentframe();
+		row = dialogrow(target);
+		assert(row >= 0 && ink[row][col] == pixel(PASTE_BLUE));
+		for (k = 0; k < nblends; k++)
+			field += blends[k].alpha == 0xffff &&
+			         blends[k].red == pastevalues[PASTE_GOLD].red &&
+			         blends[k].green == pastevalues[PASTE_GOLD].green &&
+			         blends[k].blue == pastevalues[PASTE_GOLD].blue &&
+			         blends[k].h == urlbox.height;
+		assert(field);
+		testmouse_put("\033[Hxxxxxxx");
+		presentframe();
+		assert(dialogrow(target) >= 0);
+		now.tv_sec += urlflashtimeout / 1000 + 1;
+		urlflashremaining(now);
+		assert(!urlbox.text && !urlbox.flash);
+		presentframe();
+		assert(dialogrow(target) < 0);
+	}
+	assert(!urlbox.text && testmouse_offset() == offset);
+	expect(fd, NULL);
+	testmouse_put("\033[H\033]8;id=project;https://example.com/actual;target?q=1#part\033\\"
+	              "Project\033]8;;\033\\");
+	clickat(1, 0);
+	assert(urlbox.text && !urlbox.flash && !strcmp(urlbox.text, target));
+	press(XK_Escape, 0);
+	expect(fd, NULL);
+
+	/* It starts below the label whichever character is clicked, fading both
+	 * ways, and goes above near the bottom edge. */
+	testmouse_put("\033[4;32H\033]8;;https://example.com\033\\Project\033]8;;\033\\");
+	clickat(35, 3);
+	assert(urlbox.text && urlbox.anchorrow == 3 && urlbox.anchorendrow == 3);
+	assert(urlbox.col == 31 && urlbox.y == 4 * win.ch);
+	presentframe();
+	assert(painted[dialogrow("https://example.com")][31] == 'h');
+	assert(nfades == 2 && !fades[0].start && fades[0].end == 30 * win.cw);
+	assert(fades[0].left.alpha == 0x0ccc && fades[0].right.alpha == 0xffff);
+	assert(fades[1].start == (31 + 19 + 1) * win.cw && fades[1].end == win.w);
+	assert(fades[1].left.alpha == 0xffff && fades[1].right.alpha == 0x0ccc);
+	press(XK_Escape, 0);
+	clickat(31, 3);
+	assert(urlbox.col == 31);
+	press(XK_Escape, 0);
+	testmouse_put("\033[10;76H\033]8;;https://example.com\033\\Edge\033]8;;\033\\");
+	clickat(77, 9);
+	assert(urlbox.text && urlbox.anchorrow == 9);
+	assert(urlbox.col == 80 - 19);
+	assert(urlbox.y + urlbox.height == 9 * win.ch);
+	press(XK_Escape, 0);
+	expect(fd, NULL);
+
+	/* Below a wrapped label it starts at the left of its last row. */
+	testmouse_put("\033[2;79H\033]8;;a:b\033\\Wrap\033]8;;\033\\");
+	clickat(1, 2);
+	assert(urlbox.text && urlbox.col == 0 && urlbox.width == 3);
+	assert(urlbox.anchorrow == 1 && urlbox.anchorendrow == 2);
+	assert(urlbox.y == 3 * win.ch);
+	press(XK_Escape, 0);
+	expect(fd, NULL);
+
+	/* The colors are configurable, also while flashing. */
+	urlboxcolor = 0x010203;
+	urlboxtextcolor = 0x070809;
+	urlboxflashcolor = 0x0a0b0c;
+	urlboxflashtextcolor = 0x0d0e0f;
+	urlboxfadeopacity = 0.25;
+	urlboxopen(xstrdup(target), 0, 0, 0);
+	presentframe();
+	assert(ink[dialogrow(target)][0] == 0x070809);
+	{
+		int k, solid = 0;
+
+		for (k = 0; k < nblends; k++)
+			solid += blends[k].alpha == 0xffff && blends[k].blue == 0x0303;
+		assert(solid == 1);
+	}
+	assert(nfades == 1 && fades[0].left.blue == 0x0303);
+	assert(fades[0].right.alpha == 0x3fff);
+	urlbox.flash = 1;
+	presentframe();
+	assert(ink[dialogrow(target)][0] == 0x0d0e0f);
+	assert(nfades == 1 && fades[0].left.blue == 0x0c0c);
+	urlbox.flash = 0;
+	press(XK_Escape, 0);
+	urlboxcolor = 0x2563eb;
+	urlboxtextcolor = 0xffd75f;
+	urlboxflashcolor = 0xffd75f;
+	urlboxflashtextcolor = 0x2563eb;
+	urlboxfadeopacity = 0.05;
+	expect(fd, NULL);
+
+	/* A URL wider than the window can be read to its end with the wheel and
+	 * page keys, also after resizing down to a single cell. */
+	memset(longuri, 'x', sizeof(longuri) - 1);
+	memcpy(longuri, "https://example.com/", 20);
+	longuri[sizeof(longuri) - 1] = '\0';
+	urlboxopen(xstrdup(longuri), 0, 0, 0);
+	resizewindow(20, 4);
+	presentframe();
+	assert(urlbox.top == 0 && urlbox.col == 0 && urlbox.width == 20);
+	assert(nfades == 0 && dialogrow("Esc") < 0);
+	wheel(Button5);
+	assert(urlbox.top == 1 && testmouse_offset() == offset);
+	lookuptext = "";
+	press(XK_Next, 0);
+	lookuptext = "x";
+	assert(urlbox.top == 2);
+	for (cols = 1; cols <= 5; cols++)
+		for (rows = 1; rows <= 3; rows++) {
+			resizewindow(cols, rows);
+			presentframe();
+		}
+	resizewindow(80, 10);
+	presentframe();
+	before = owned;
+	e.type = ButtonPress;
+	e.xbutton.x = borderpx + urlbox.col * win.cw + 1;
+	e.xbutton.y = urlbox.y + 1;
+	bpress(&e);
+	press(XK_Escape, 0);
+	e.type = ButtonRelease;
+	brelease(&e);
+	assert(!urlbox.text && owned == before);
+	expect(fd, NULL);
+
+	/* Enter and keypad Enter activate once, even under autorepeat, and
+	 * consume the newline. Disabling the flash dismisses immediately. */
+	{
+		static const KeySym keys[] = { XK_Return, XK_KP_Enter };
+		size_t i;
+		for (i = 0; i < LEN(keys); i++) {
+			struct timespec now;
+			urlboxopen(xstrdup(target), 0, 0, 0);
+			lookuptext = "\r";
+			before = owned;
+			press(keys[i], 0);
+			assert(urlbox.text && urlbox.flash && owned == before + 2);
+			assert(!strcmp(xsel.primary, target) && !strcmp(xsel.clipboard, target));
+			now = urlbox.flashed;
+			press(keys[i], 0);
+			assert(owned == before + 2 && !TIMEDIFF(urlbox.flashed, now));
+			expect(fd, NULL);
+			now.tv_sec += urlflashtimeout / 1000 + 1;
+			urlflashremaining(now);
+			assert(!urlbox.text);
+		}
+		{
+			unsigned int timeout = urlflashtimeout;
+			urlflashtimeout = 0;
+			urlboxopen(xstrdup(target), 0, 0, 0);
+			before = owned;
+			press(XK_Return, 0);
+			assert(!urlbox.text && owned == before + 2);
+			expect(fd, NULL);
+			urlflashtimeout = timeout;
+		}
+		lookuptext = "x";
+	}
+
+	/* Character input dismisses the bar and goes through the normal input
+	 * path once, preserving UTF-8, terminal mappings, Ctrl and Alt. */
+	{
+		static const struct { KeySym key; uint state; const char *text, *sent; } input[] = {
+			{ XK_x, 0, "x", "x" },
+			{ XK_eacute, 0, "\u00e9", "\u00e9" },
+			{ XK_Kanji, 0, "\u754c", "\u754c" },
+			{ XK_c, ControlMask, "\003", "\003" },
+			{ XK_x, Mod1Mask, "x", "\033x" },
+			{ XK_Left, 0, "", "\033[D" },
+			{ XK_Right, 0, "", "\033[C" },
+			{ XK_Home, 0, "", "\033[H" },
+			{ XK_End, 0, "", "\033[4~" },
+			{ XK_F1, 0, "", "\033OP" },
+		};
+		size_t i;
+		for (i = 0; i < LEN(input); i++) {
+			urlboxopen(xstrdup(target), 0, 0, 0);
+			lookuptext = input[i].text;
+			press(input[i].key, input[i].state);
+			assert(!urlbox.text);
+			expect(fd, input[i].sent);
+		}
+		lookuptext = "x";
+	}
+	/* Keys with local bindings also dismiss the bar and run once. */
+	urlboxopen(xstrdup(target), 0, 0, 0);
+	lookuptext = "";
+	before = requests;
+	press(XK_Insert, ShiftMask);
+	assert(!urlbox.text && requests == before + 1 && paste.state == PASTE_WAIT);
+	pasteclear();
+	expect(fd, NULL);
+	/* Only plain keys act on the bar, and only scroll what does not fit. */
+	resizewindow(40, 5);
+	tresize(40, 5);
+	{
+		static const struct { KeySym key; uint state; const char *sent; } passed[] = {
+			{ XK_Return, Mod1Mask, "\033\r" },
+			{ XK_Up, 0, "\033[A" },
+			{ XK_Down, 0, "\033[B" },
+			{ XK_Up, ControlMask, "\033[1;5A" },
+		};
+		static const char shorttarget[] = "https://a.example/";
+		char longtarget[128];
+		size_t i;
+
+		lookuptext = "";
+		for (i = 0; i < LEN(passed); i++) {
+			urlboxopen(xstrdup(shorttarget), 0, 0, 0);
+			press(passed[i].key, passed[i].state);
+			assert(!urlbox.text);
+			expect(fd, passed[i].sent);
+		}
+		memset(longtarget, 'a', sizeof(longtarget) - 1);
+		longtarget[sizeof(longtarget) - 1] = '\0';
+		memcpy(longtarget, "https://", 8);
+		urlboxopen(xstrdup(longtarget), 0, 0, 0);
+		press(XK_Down, 0);
+		assert(urlbox.text && urlbox.top == 1);
+		/* Caps Lock is not a modifier here. */
+		press(XK_Up, LockMask);
+		assert(urlbox.text && urlbox.top == 0);
+		press(XK_Down, ControlMask);
+		assert(!urlbox.text);
+		expect(fd, "\033[1;5B");
+		urlboxopen(xstrdup(shorttarget), 0, 0, 0);
+		before = owned;
+		press(XK_Return, LockMask);
+		assert(owned > before);
+		urlboxclose();
+		expect(fd, NULL);
+	}
+	lookuptext = "x";
+}
+
 /* The search bar's settings, apart from those of paste dialogs. */
 static void
 testsearchcolors(void)
@@ -3016,10 +3398,11 @@ main(void)
 	testsearchunchanged(sockets[1]);
 	testsearchstatus();
 	testsearchcolors();
+	testhyperlinkbox(sockets[1]);
 	vbellfree();
 	free(display);
 	close(sockets[0]);
 	close(sockets[1]);
-	puts("PASS: control confirmation, sanitizing, UTF-8 preview, whole INCR transfers, ignored late replies, fixed paste mode, transfer limits/timeouts, dialog layout, navigation, asking before the original, full view, redraw and search input");
+	puts("PASS: control confirmation, sanitizing, UTF-8 preview, whole INCR transfers, ignored late replies, fixed paste mode, transfer limits/timeouts, dialog layout, navigation, asking before the original, full view, redraw, search input and OSC 8 target boxes");
 	return 0;
 }

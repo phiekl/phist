@@ -61,6 +61,7 @@ enum undercurl_slope_type {
 #define XK_ANY_MOD    UINT_MAX
 #define XK_NO_MOD     0
 #define XK_SWITCH_MOD (1<<13|1<<14)
+#define MOUSE_BUTTONS (Button1Mask | Button2Mask | Button3Mask | Button4Mask | Button5Mask)
 
 /* function definitions used in config.h */
 static void clipcopy(const Arg *);
@@ -76,6 +77,10 @@ static void searchstart(const Arg *);
 static void searchinsert(const char *, size_t);
 static int searchkey(KeySym, uint, const char *, int);
 static void searchdraw(void);
+static int urlboxmouse(XEvent *);
+static int urlboxkey(KeySym, uint);
+static void urlboxdraw(void);
+static void urlboxopen(char *, int, int, int);
 static void zoom(const Arg *);
 static void zoomabs(const Arg *);
 static void zoomreset(const Arg *);
@@ -390,11 +395,27 @@ sendinput(const char *text, size_t len, int may_echo)
 }
 
 static struct {
-	int active, col, row;
+	int active, col, row, explicit, anchorcol, anchorrow, anchorendcol, anchorendrow;
 	char *text;
 } urlclick;
 static int urlflashset;
 static struct timespec lasturlflash;
+
+static struct {
+	char *text;
+	int top, armed, flash;
+	int col, width, height, y;
+	int anchorcol, anchorrow, anchorendrow;
+	struct timespec flashed;
+} urlbox;
+
+static void
+urlboxclose(void)
+{
+	free(urlbox.text);
+	urlbox.text = NULL;
+	urlbox.flash = urlbox.armed = 0;
+}
 
 static void
 urlflashbegin(int col, int row)
@@ -411,15 +432,22 @@ urlflashbegin(int col, int row)
 static double
 urlflashremaining(struct timespec now)
 {
-	double remain;
+	double remain = -1, boxremain;
 
-	if (!urlflashset)
-		return -1;
-	remain = urlflashtimeout - TIMEDIFF(now, lasturlflash);
-	if (remain <= 0) {
-		urlflashset = 0;
-		tclearurlflash();
-		return -1;
+	if (urlflashset) {
+		remain = urlflashtimeout - TIMEDIFF(now, lasturlflash);
+		if (remain <= 0) {
+			urlflashset = 0;
+			tclearurlflash();
+			remain = -1;
+		}
+	}
+	if (urlbox.text && urlbox.flash) {
+		boxremain = urlflashtimeout - TIMEDIFF(now, urlbox.flashed);
+		if (boxremain <= 0)
+			urlboxclose();
+		else
+			remain = remain < 0 ? boxremain : MIN(remain, boxremain);
 	}
 	return remain;
 }
@@ -586,6 +614,19 @@ static const char *searchkeys[][2] = {
 	{ "Esc" },
 };
 
+/* How far the bar's field reaches above a row of text, how far the bar extends
+ * past the field, and its height: like the paste preview's field, unless the
+ * window is too short for that. */
+static void
+searchbarsize(int *ft, int *b, int *h)
+{
+	*ft = pastefieldtop();
+	*b = MAX(2, win.ch / 4);
+	*h = *ft + win.ch + 2 * *b;
+	if (*h > win.h)
+		*ft = *b = 0, *h = win.ch;
+}
+
 static XRenderColor
 rgbvalue(unsigned int rgb)
 {
@@ -624,6 +665,208 @@ rgbcolor(unsigned int rgb)
 	c->next = colors;
 	colors = c;
 	return &c->color;
+}
+
+/* Convert to XRender's signed 16.16 format, clamping before conversion to
+ * avoid overflow in windows wider than its coordinate range. */
+static XFixed
+xfixed(double v)
+{
+	if (!(v > -32768))
+		return INT_MIN;
+	return v >= 32768 ? INT_MAX : XDoubleToFixed(v);
+}
+
+/* Create a horizontal gradient; return 0 if clamping collapses its endpoints. */
+static int
+xgradientline(XLinearGradient *line, double x1, double x2)
+{
+	line->p1 = (XPointFixed){ xfixed(x1), 0 };
+	line->p2 = (XPointFixed){ xfixed(x2), 0 };
+	return line->p1.x < line->p2.x;
+}
+
+/* Fill a strip between two columns of pixels with a gradient between colors. */
+static void
+rgbfade(const XRenderColor *from, const XRenderColor *to, int x1, int x2, int y, int h)
+{
+	XLinearGradient line;
+	XFixed stops[] = { 0, XDoubleToFixed(1) };
+	XRenderColor colors[] = { *from, *to };
+	Picture gradient;
+
+	if (!xgradientline(&line, x1, x2))
+		return;
+	gradient = XRenderCreateLinearGradient(xw.dpy, &line, stops, colors, LEN(stops));
+	XRenderComposite(xw.dpy, PictOpOver, gradient, None, XftDrawPicture(xw.draw),
+	                 x1, y, 0, 0, x1, y, x2 - x1, h);
+	XRenderFreePicture(xw.dpy, gradient);
+}
+
+/* The target in a single row as tall as the search bar, starting just below
+ * the label, or as far along as lets it fit. A target longer than the window
+ * shows a window's width at a time, with wheel/key scrolling. */
+static void
+urlboxlayout(void)
+{
+	int cols = MAX(1, win.tw / win.cw), rows = MAX(1, win.th / win.ch);
+	int ft, b, len = strlen(urlbox.text), anchorrow, anchorendrow;
+
+	urlbox.width = MAX(1, MIN(cols, len));
+	LIMIT(urlbox.top, 0, MAX(0, DIVCEIL(len, urlbox.width) - 1));
+	anchorrow = MAX(0, MIN(urlbox.anchorrow, rows - 1));
+	anchorendrow = MAX(anchorrow, MIN(urlbox.anchorendrow, rows - 1));
+	/* Only the last row of a wrapped label is above the bar. */
+	urlbox.col = anchorendrow > anchorrow ? 0 : urlbox.anchorcol;
+	LIMIT(urlbox.col, 0, cols - urlbox.width);
+	searchbarsize(&ft, &b, &urlbox.height);
+	urlbox.y = borderpx + (anchorendrow + 1) * win.ch;
+	if (urlbox.y + urlbox.height > win.h)
+		urlbox.y = borderpx + anchorrow * win.ch - urlbox.height;
+	LIMIT(urlbox.y, 0, MAX(0, win.h - urlbox.height));
+}
+
+static void
+urlboxopen(char *text, int col, int row, int endrow)
+{
+	pasteclear();
+	free(urlbox.text);
+	memset(&urlbox, 0, sizeof(urlbox));
+	urlbox.text = text;
+	urlbox.anchorcol = col;
+	urlbox.anchorrow = row;
+	urlbox.anchorendrow = endrow;
+	urlboxlayout();
+	redraw();
+}
+
+static int
+urlboxhit(XEvent *e)
+{
+	int col = (e->xbutton.x - borderpx) / win.cw - urlbox.col;
+
+	return e->xbutton.x >= borderpx + urlbox.col * win.cw &&
+	       BETWEEN(e->xbutton.y, urlbox.y, urlbox.y + urlbox.height - 1) &&
+	       BETWEEN(col, 0, urlbox.width - 1) &&
+	       (size_t)(urlbox.top * urlbox.width + col) < strlen(urlbox.text);
+}
+
+static void
+urlboxactivate(Time time)
+{
+	if (urlbox.flash)
+		return;
+	setsel(xstrdup(urlbox.text), time);
+	clipcopy(NULL);
+	if (urlflashtimeout) {
+		urlbox.flash = 1;
+		clock_gettime(CLOCK_MONOTONIC, &urlbox.flashed);
+	} else
+		urlboxclose();
+}
+
+static int
+urlboxmouse(XEvent *e)
+{
+	int btn = e->xbutton.button;
+
+	if (!urlbox.text)
+		return 0;
+	urlboxlayout();
+	if (e->type == ButtonPress) {
+		mouseignored |= buttonmask(btn);
+		if (btn == Button4 || btn == Button5) {
+			urlbox.top += btn == Button4 ? -1 : 1;
+			urlbox.armed = 0;
+		} else if (btn == Button1 && urlboxhit(e))
+			urlbox.armed = 1;
+		else
+			urlboxclose();
+	} else if (e->type == ButtonRelease) {
+		mouseignored &= ~buttonmask(btn);
+		if (btn == Button1 && urlbox.armed) {
+			if (urlboxhit(e))
+				urlboxactivate(e->xbutton.time);
+			else
+				urlboxclose();
+		}
+		urlbox.armed = 0;
+	}
+	redraw();
+	XFlush(xw.dpy);
+	return 1;
+}
+
+static int
+urlboxkey(KeySym key, uint state)
+{
+	uint mods = state & ~(ignoremod | LockMask | MOUSE_BUTTONS);
+	int scrolls;
+
+	if (!urlbox.text)
+		return 0;
+	/* Only plain keys act on the bar, and only scroll a target that needs it. */
+	scrolls = !mods && strlen(urlbox.text) > (size_t)urlbox.width;
+	if (!mods && (key == XK_Return || key == XK_KP_Enter)) {
+		urlboxactivate(CurrentTime);
+		redraw();
+		XFlush(xw.dpy);
+		return 1;
+	}
+	if (key == XK_Escape) {
+		urlboxclose();
+		redraw();
+		return 1;
+	}
+	if (scrolls && (key == XK_Up || key == XK_Prior || key == XK_KP_Up || key == XK_KP_Prior))
+		urlbox.top--;
+	else if (scrolls && (key == XK_Down || key == XK_Next || key == XK_KP_Down || key == XK_KP_Next))
+		urlbox.top++;
+	else if (!IsModifierKey(key)) {
+		urlboxclose();
+		redraw();
+		/* Continue through normal shortcuts and input, even without text. */
+		return 0;
+	}
+	redraw();
+	return 1;
+}
+
+/* The bar is solid behind the target and a cell either side, and fades out
+ * towards the window's edges. */
+static void
+urlboxdraw(void)
+{
+	char line[2049];
+	int ft, b, h, x, y, n, solid, end;
+	size_t off;
+	unsigned int fg = urlbox.flash ? urlboxflashtextcolor : urlboxtextcolor;
+	XRenderColor text = rgbvalue(fg);
+	XRenderColor bar = rgbvalue(urlbox.flash ? urlboxflashcolor : urlboxcolor);
+	XRenderColor faded = bar;
+
+	if (!urlbox.text)
+		return;
+	urlboxlayout();
+	searchbarsize(&ft, &b, &h);
+	off = (size_t)urlbox.top * urlbox.width;
+	n = MIN((size_t)urlbox.width, strlen(urlbox.text) - off);
+	memcpy(line, urlbox.text + off, n);
+	line[n] = '\0';
+	x = borderpx + urlbox.col * win.cw;
+	y = urlbox.y + b + ft;
+	solid = MAX(0, x - win.cw);
+	end = MIN(win.w, x + (n + 1) * win.cw);
+	faded.alpha = MAX(0, MIN(1, urlboxfadeopacity)) * 0xffff;
+	if (solid > 0)
+		rgbfade(&faded, &bar, 0, solid, urlbox.y, h);
+	pasteblend(&bar, 0xffff, solid, urlbox.y, end - solid, h);
+	if (end < win.w)
+		rgbfade(&bar, &faded, end, win.w, urlbox.y, h);
+	pasteshift = y - borderpx;
+	pastedrawline(line, urlbox.col, 0, urlbox.width, rgbcolor(fg));
+	pasteblend(&text, 0xffff, x, y + win.ch - 2, n * win.cw, 1);
+	pasteshift = 0;
 }
 
 /* Columns group i takes: each key cap with a cell on either side, a cell
@@ -711,13 +954,7 @@ searchdraw(void)
 		tail += n;
 	}
 
-	/* The field reaches up like the paste preview's, and the bar extends
-	 * past it by b, unless the window is too short for that. */
-	ft = pastefieldtop();
-	b = MAX(2, win.ch / 4);
-	h = ft + win.ch + 2 * b;
-	if (h > win.h)
-		ft = b = 0, h = win.ch;
+	searchbarsize(&ft, &b, &h);
 	/* Move the bar to the top if it would cover the match, including in
 	 * live output. */
 	top = win.h - h;
@@ -892,6 +1129,8 @@ bpress(XEvent *e)
 	struct timespec now;
 	int snap;
 
+	if (urlboxmouse(e))
+		return;
 	/* The wheel scrolls history, also beneath alternate-screen programs
 	 * and the paste boxes, but the text in the paste's full view. */
 	if (btn == Button4 || btn == Button5) {
@@ -938,8 +1177,16 @@ bpress(XEvent *e)
 	    (urlclick.text = tgeturl(evcol(e), evrow(e)))) {
 		xsel.clicks = 0;
 		urlclick.active = 1;
+		urlclick.explicit = thyperlink(evcol(e), evrow(e));
 		urlclick.col = evcol(e);
 		urlclick.row = evrow(e);
+		urlclick.anchorcol = urlclick.col;
+		urlclick.anchorrow = urlclick.row;
+		urlclick.anchorendcol = urlclick.col;
+		urlclick.anchorendrow = urlclick.row;
+		if (urlclick.explicit)
+			thyperlinkbounds(&urlclick.anchorcol, &urlclick.anchorrow,
+			                &urlclick.anchorendcol, &urlclick.anchorendrow);
 		selstart(urlclick.col, urlclick.row, 0);
 		return;
 	}
@@ -1246,6 +1493,8 @@ brelease(XEvent *e)
 {
 	int btn = e->xbutton.button;
 
+	if (urlboxmouse(e))
+		return;
 	if (pastemouse(e)) {
 		mouseignored &= ~buttonmask(btn);
 		return;
@@ -1263,10 +1512,16 @@ brelease(XEvent *e)
 	if (btn == Button1 && urlclick.active) {
 		if (urlclick.text && evcol(e) == urlclick.col && evrow(e) == urlclick.row) {
 			selclear();
-			setsel(urlclick.text, e->xbutton.time);
-			urlclick.text = NULL;
-			clipcopy(NULL);
-			urlflashbegin(urlclick.col, urlclick.row);
+			if (urlclick.explicit) {
+				urlboxopen(urlclick.text, urlclick.anchorcol, urlclick.anchorrow,
+				           urlclick.anchorendrow);
+				urlclick.text = NULL;
+			} else {
+				setsel(urlclick.text, e->xbutton.time);
+				urlclick.text = NULL;
+				clipcopy(NULL);
+				urlflashbegin(urlclick.col, urlclick.row);
+			}
 		} else {
 			if (urlclick.text)
 				mousesel(e, 0);
@@ -1287,6 +1542,8 @@ brelease(XEvent *e)
 void
 bmotion(XEvent *e)
 {
+	if (urlbox.text)
+		return;
 	if (pastemouse(e))
 		return;
 	if ((mouseignored | mousepasting) & Button1Mask)
@@ -2740,12 +2997,25 @@ xdrawglyph(Glyph g, int x, int y)
 	xdrawglyphfontspecs(&spec, g, numspecs, x, y);
 }
 
+static Glyph
+xhyperlinkstyle(Glyph g)
+{
+	if (g.link) {
+		g.fg = pastecellcolor(PASTE_BLUE);
+		g.ucolor = UCOLOR_DEFAULT;
+		g.mode &= ~(ATTR_REVERSE | ATTR_BLINK | ATTR_FAINT | ATTR_INVISIBLE | ATTR_USTYLE);
+		g.mode |= ATTR_UNDERLINE | (1 << 13);
+	}
+	return g;
+}
+
 void
 xdrawcursor(int cx, int cy, Glyph g, int ox, int oy, Glyph og)
 {
 	Color drawcol;
 
 	/* remove the old cursor */
+	og = xhyperlinkstyle(og);
 	if (selected(ox, oy))
 		og.mode ^= ATTR_REVERSE;
 	xdrawglyph(og, ox, oy);
@@ -3022,25 +3292,6 @@ vbellanimated(void)
 	return BETWEEN(vbelleffect, VBELL_WAVE, VBELL_PULSE);
 }
 
-/* Convert to XRender's signed 16.16 format, clamping before conversion to
- * avoid overflow in windows wider than its coordinate range. */
-static XFixed
-xfixed(double v)
-{
-	if (!(v > -32768))
-		return INT_MIN;
-	return v >= 32768 ? INT_MAX : XDoubleToFixed(v);
-}
-
-/* Create a horizontal gradient; return 0 if clamping collapses its endpoints. */
-static int
-xgradientline(XLinearGradient *line, double x1, double x2)
-{
-	line->p1 = (XPointFixed){ xfixed(x1), 0 };
-	line->p2 = (XPointFixed){ xfixed(x2), 0 };
-	return line->p1.x < line->p2.x;
-}
-
 /* Create concentric gradient rings; return 0 if their clamped radii coincide. */
 static int
 vbellcircles(XRadialGradient *radial, double inner, double outer)
@@ -3069,7 +3320,7 @@ vbellrender(double progress)
 	int bell = vbellset && depth >= 1 && vbellwidth && vbellopacity > 0 &&
 	           (!vbellanimated() || progress < 1);
 
-	if (!bell && !pastemodal() && !tsearchactive())
+	if (!bell && !pastemodal() && !tsearchactive() && !urlbox.text)
 		return xw.buf;
 	progress = MAX(0, MIN(1, progress));
 	if (!vbell.buf) {
@@ -3093,6 +3344,8 @@ vbellrender(double progress)
 	 * stays untouched, so dirty-line drawing works while a dialog is open. */
 	if (pastemodal())
 		pastedraw();
+	if (urlbox.text)
+		urlboxdraw();
 	xw.draw = draw;
 	if (!bell)
 		return vbell.buf;
@@ -3212,7 +3465,7 @@ xdrawline(Line line, int x1, int y1, int x2)
 	numspecs = xmakeglyphfontspecs(specs, &line[x1], x2 - x1, x1, y1);
 	i = ox = 0;
 	for (x = x1; x < x2 && i < numspecs; x++) {
-		new = line[x];
+		new = xhyperlinkstyle(line[x]);
 		if (new.mode & ATTR_WDUMMY)
 			continue;
 		newurl = turl(x, y1);
@@ -3262,10 +3515,11 @@ xfinishdraw(void)
 	/* If the overlay could not be set up, reuse the terminal's drawing
 	 * context on the window. A modal dialog must stay visible, and drawing
 	 * it here still leaves the terminal buffer clean for the next frame. */
-	if (frame == xw.buf && (pastemodal() || tsearchactive())) {
+	if (frame == xw.buf && (pastemodal() || tsearchactive() || urlbox.text)) {
 		XftDrawChange(xw.draw, xw.win);
 		searchdraw();
 		pastedraw();
+		urlboxdraw();
 		XftDrawChange(xw.draw, xw.buf);
 	}
 	XSetForeground(xw.dpy, dc.gc,
@@ -3456,6 +3710,8 @@ kpress(XEvent *ev)
 	} else {
 		len = XLookupString(e, buf, sizeof buf, &ksym, NULL);
 	}
+	if (urlboxkey(ksym, e->state))
+		return;
 	if (pastekey(ksym, e->state))
 		return;
 	if (searchkey(ksym, e->state, buf, len))
