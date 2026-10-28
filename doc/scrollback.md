@@ -27,6 +27,83 @@ alternate-screen program is active, so that program never receives these
 keys. In configured scroll actions, a negative distance is relative to the
 current screen height.
 
+## Searching
+
+Press Ctrl+/ and type to search the retained history and screen. Search is
+literal and case-sensitive, starts with the last match in or before the
+current view, and updates as you type. The current result is highlighted
+in bright yellow, and other matches on screen in a muted amber.
+Soft-wrapped text is searched as one line; matches never cross hard line
+breaks or the boundary between the main and alternate screens. Unicode
+text, wide characters and composed combining characters work as they do in
+terminal output.
+
+- Up or Ctrl+P finds the previous match; Down or Ctrl+N finds the next.
+  Navigation wraps around at either end. Shift+Enter also finds the previous
+  match.
+- Home goes to the first match, the oldest in the history; End goes to
+  the last.
+- Page Up goes to the nearest match above the rows in view, and Page Down
+  to the nearest below them, skipping any others in view: one match or a
+  hundred. On the first or last page with matches, they go to the first or
+  last match; unlike Up and Down, they do not wrap around.
+- Enter closes search and keeps the result in view.
+- Escape or Ctrl+C cancels and restores the view from before searching.
+- Backspace or Delete removes the last character; Ctrl+U clears the query.
+- Clipboard paste shortcuts insert into the query, using the usual paste
+  confirmation when needed. Search input is never sent to the child process.
+
+The search bar is styled like the paste dialog. Its sunken query field
+shows a hint when empty. The right side shows the current match and total,
+such as `3/17`, or `No match`. Matches are
+counted from the top of the history, overlapping ones separately. The keys
+follow on key caps, dropped in narrow windows to leave the field room. The
+bar sits at the bottom of the window, or at the top while the match is
+beneath it. Queries are limited to 1,023 UTF-8 bytes. Ctrl+/ also accepts
+Shift for keyboard layouts that need it to type `/`; the bindings are in
+`shortcuts` in `config.h`.
+
+The colors are set in `config.h`, as `0xRRGGBB`, independently of the paste
+dialogs:
+
+| Setting | Meaning | Default |
+| --- | --- | --- |
+| `searchbarcolor` | The bar | `0x2563eb` |
+| `searchbaroutlinecolor` | The bar's outline | `0x000000` |
+| `searchfieldcolor` | Shade of the field | `0x000000` |
+| `searchtextcolor` | The query | `0xffffff` |
+| `searchcursorcolor` | The cursor | `0xffffff` |
+| `searchcursortextcolor` | The hint's letter under the cursor | `0x2563eb` |
+| `searchhintcolor` | The rest of the hint | `0xb4c6f4` |
+| `searchstatuscolor` | The current match's number and the total, e.g. `2/5` | `0xb4c6f4` |
+| `searchnomatchcolor` | `No match` | `0xffd75f` |
+| `searchkeycolor` | Shade of the key caps | `0xffffff` |
+| `searchkeytextcolor` | The keys' names | `0xffffff` |
+| `searchmatchcolor` | Background of the current match | `0xfff028` |
+| `searchmatchtextcolor` | Text of the current match | `0x000000` |
+| `searchothermatchcolor` | Background of other matches | `0x705818` |
+| `searchothermatchtextcolor` | Text of other matches | `0xffe4a0` |
+
+The field and key caps are translucent, and the outline partly so, at a fixed
+opacity. Regenerate `config.h` to adopt these settings, as explained in
+[building](building.md#build-and-configure).
+
+While an alternate-screen program runs, search includes the main screen
+beneath it and the retained history, as well as that program's screen.
+Output keeps the current match highlighted while its text remains
+retained; overwriting or evicting it removes the highlight. Other matches
+on screen are found again for each frame, scanning only the rows in view,
+so output can add or remove them. The count is from the last search; edit
+the query or navigate again to search newer output. If output removes the
+current match or adds matches after a failed search, the status is blank
+until the next scan. Resizing or switching screens refreshes the query and
+uses the resulting view as the cancellation point.
+
+Run `LC_ALL=C.UTF-8 sh tests/search.sh` for core search regressions.
+`tests/paste.sh` also checks the trigger, query editing, input isolation,
+clipboard routing, prompt drawing and allocation-failure fallback;
+`tests/rendering.sh` checks highlight colors without changing stored cells.
+
 ## Resize behavior
 
 Soft-wrapped rows belong to one logical line, which is rewrapped to fit the

@@ -494,10 +494,18 @@ pastesend(int mode)
 {
 	int bracketed = IS_SET(MODE_BRCKTPASTE), done;
 	size_t i, j, len;
-	char *text = xmalloc(MAX(paste.len, 1) * 4);
+	char *text;
 
+	text = xmalloc(MAX(paste.len, 1) * 4);
 	paste.state = PASTE_SEND;
 	len = pastetransform(mode, text, &done);
+	/* Search owns input until it closes, including confirmed clipboard data. */
+	if (tsearchactive()) {
+		searchinsert(text, len);
+		free(text);
+		pasteclear();
+		return;
+	}
 	for (i = j = 0; i < len; i++) {
 		/* ESC could terminate a bracketed paste early. */
 		if (bracketed && text[i] == '\033')
@@ -1145,7 +1153,7 @@ pastekey(KeySym key, uint state)
 }
 
 enum { PASTE_BLACK, PASTE_WHITE, PASTE_YELLOW, PASTE_BLUE, PASTE_RED, PASTE_GOLD,
-       PASTE_DARKYELLOW, PASTE_DARKBLUE, PASTE_DARKRED, PASTE_COLORS };
+       PASTE_DARKYELLOW, PASTE_DARKBLUE, PASTE_DARKRED, PASTE_PALE, PASTE_COLORS };
 
 static const XRenderColor pastevalues[] = {
 	{ .alpha = 0xffff },
@@ -1157,7 +1165,12 @@ static const XRenderColor pastevalues[] = {
 	{ .red = 0xc8c8, .green = 0xb0b0, .alpha = 0xffff },
 	{ .red = 0x1e1e, .green = 0x3a3a, .blue = 0x8a8a, .alpha = 0xffff },
 	{ .red = 0x6e6e, .alpha = 0xffff },
+	{ .red = 0xb4b4, .green = 0xc6c6, .blue = 0xf4f4, .alpha = 0xffff },
 };
+
+/* Pixels to move text and key caps down by, for a box such as the search
+ * bar that does not sit on the cell grid. */
+static int pasteshift;
 #define pasteblack pastevalues[PASTE_BLACK]
 #define pastewhite pastevalues[PASTE_WHITE]
 
@@ -1237,7 +1250,8 @@ pastedrawline(const char *s, int col, int row, int width, Color *color)
 {
 	Glyph g = {0};
 	GlyphFontSpec spec;
-	XRectangle clip = { .x = borderpx + col * win.cw, .y = borderpx + row * win.ch,
+	XRectangle clip = { .x = borderpx + col * win.cw,
+	                    .y = borderpx + row * win.ch + pasteshift,
 	                    .width = width * win.cw, .height = win.ch };
 	Rune u;
 	size_t n, len = strlen(s);
@@ -1255,6 +1269,7 @@ pastedrawline(const char *s, int col, int row, int width, Color *color)
 		g.u = u;
 		g.mode = w == 2 ? ATTR_WIDE : 0;
 		numspecs = xmakeglyphfontspecs(&spec, &g, 1, col + x, row);
+		spec.y += pasteshift;
 		XftDrawGlyphFontSpec(xw.draw, color, &spec, numspecs);
 		x += w;
 		s += n;
@@ -1334,11 +1349,11 @@ pastedrawframe(int col, int row, int width, int height, int title, int modal)
 /* A raised area, like a key: a lighter fill with darker bottom and right
  * edges. */
 static void
-pasteraise(int x, int y, int w, int h)
+pasteraise(const XRenderColor *fill, int x, int y, int w, int h)
 {
 	int b = MAX(1, win.ch / 10);
 
-	pasteblend(&pastewhite, 0x4000, x, y, w, h - b);
+	pasteblend(fill, 0x4000, x, y, w, h - b);
 	pasteblend(&pasteblack, 0x6000, x, y + h - b, w, b);
 	pasteblend(&pasteblack, 0x4000, x + w - 1, y, 1, h - b);
 }
@@ -1368,15 +1383,17 @@ pastedrawchip(const char *s, int col, int row, int width, int room, Color *fg)
 	return n + u + 5;
 }
 
-/* A raised key cap three cells wide centered on the key at col. Given a
- * blank row above, it is as tall as the chips and the preview field. */
+/* A raised key cap over a key name width cells wide at col, with a cell
+ * on either side. Given a blank row above, it is as tall as the chips and
+ * the preview field. */
 static void
-pastedrawkey(int col, int row, int room)
+pastedrawkey(const XRenderColor *fill, int col, int width, int row, int room)
 {
 	int top = room ? pastefieldtop() : -1;
 
-	pasteraise(borderpx + (col - 1) * win.cw, borderpx + row * win.ch - top,
-	           3 * win.cw, win.ch + top + (room ? 0 : -1));
+	pasteraise(fill, borderpx + (col - 1) * win.cw,
+	           borderpx + row * win.ch + pasteshift - top,
+	           (width + 2) * win.cw, win.ch + top + (room ? 0 : -1));
 }
 
 /* Lines of the dialog and its question; the kinds are ordered by how
@@ -1487,7 +1504,7 @@ pastedrawview(int cols, int rows, Color *fg, Color *bg)
 		             row >= paste.len ? 100 : (int)(100 * (double)row / paste.len));
 		pastedrawline(buf, left + MAX(0, inner - n), y, MIN(n, inner), fg);
 		if (inner >= n + 4) {
-			pastedrawkey(left + 1, y, 0);
+			pastedrawkey(&pastewhite, left + 1, 1, y, 0);
 			pastedrawline("C", left + 1, y, 1, fg);
 		}
 		label = paste.copied > 0 ? "Copied to clipboard" :
@@ -1517,7 +1534,7 @@ pastedrawitem(int key, const char *label, int marked, int invert, int room,
 	int top = room ? pastefieldtop() : 0;
 
 	if (inner > PASTE_KEYCOL + 1)
-		pastedrawkey(left + PASTE_KEYCOL, row, room);
+		pastedrawkey(&pastewhite, left + PASTE_KEYCOL, 1, row, room);
 	if (marked)
 		pastedrawline("\u25b8", left, row, inner, fg);
 	if (inner > PASTE_KEYCOL)

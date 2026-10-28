@@ -71,6 +71,10 @@ static void pasteclear(void);
 static double pasteremaining(struct timespec);
 static int pastekey(KeySym, uint);
 static void pastedraw(void);
+static void searchstart(const Arg *);
+static void searchinsert(const char *, size_t);
+static int searchkey(KeySym, uint, const char *, int);
+static void searchdraw(void);
 static void zoom(const Arg *);
 static void zoomabs(const Arg *);
 static void zoomreset(const Arg *);
@@ -463,6 +467,291 @@ xlazycolor(Color *color, int *loaded, const XRenderColor *value, Color *fallback
 
 #include "paste.c"
 
+static char searchtext[SEARCH_MAX];
+static size_t searchlen;
+
+static void
+searchstart(const Arg *arg)
+{
+	(void)arg;
+	pasteclear();
+	searchlen = 0;
+	searchtext[0] = '\0';
+	tsearchstart();
+	redraw();
+}
+
+static void
+searchinsert(const char *text, size_t len)
+{
+	Rune u;
+	size_t i, n, before = searchlen;
+
+	for (i = 0; i < len; i += n) {
+		n = pasteutf8(text + i, len - i, &u);
+		if (!n) {
+			n = 1;
+			continue;
+		}
+		if (u < 0x20 || BETWEEN(u, 0x7f, 0x9f))
+			continue;
+		if (n >= sizeof(searchtext) - searchlen)
+			break;
+		memcpy(searchtext + searchlen, text + i, n);
+		searchlen += n;
+	}
+	if (searchlen == before)
+		return;
+	searchtext[searchlen] = '\0';
+	tsearchset(searchtext);
+	redraw();
+}
+
+/* Search consumes keys before the ordinary shortcuts and tty mappings.
+ * Clipboard and font bindings still work; pasted data goes to the query. */
+static int
+searchkey(KeySym key, uint state, const char *text, int len)
+{
+	Shortcut *bp;
+	uint mods = state & ~(ignoremod | LockMask);
+	/* Caps Lock reports Ctrl+C as XK_C, for example. */
+	KeySym lower = key >= XK_A && key <= XK_Z ? key + XK_a - XK_A : key;
+	int cancel = key == XK_Escape || (mods == ControlMask && lower == XK_c);
+
+	if (!tsearchactive())
+		return 0;
+	if (cancel || ((key == XK_Return || key == XK_KP_Enter) && !mods)) {
+		pasteclear();
+		tsearchend(cancel);
+		redraw();
+		return 1;
+	}
+	for (bp = shortcuts; bp < shortcuts + LEN(shortcuts); bp++) {
+		if ((key == bp->keysym || lower == bp->keysym) &&
+		    match(bp->mod, state & ~LockMask) &&
+		    (pasteaction(bp->func) || bp->func == clipcopy ||
+		     bp->func == zoom || bp->func == zoomreset)) {
+			bp->func(&bp->arg);
+			return 1;
+		}
+	}
+	if ((mods == 0 && (key == XK_Up || key == XK_Down ||
+	                  key == XK_KP_Up || key == XK_KP_Down)) ||
+	    (mods == ControlMask && (lower == XK_p || lower == XK_n)) ||
+	    (mods == ShiftMask && (key == XK_Return || key == XK_KP_Enter))) {
+		tsearchnext(key == XK_Down || key == XK_KP_Down || lower == XK_n ? 1 : -1);
+		redraw();
+		return 1;
+	}
+	if (mods == 0 && (key == XK_Home || key == XK_End ||
+	                  key == XK_KP_Home || key == XK_KP_End)) {
+		tsearchedge(key == XK_End || key == XK_KP_End);
+		redraw();
+		return 1;
+	}
+	if (mods == 0 && (key == XK_Prior || key == XK_Next ||
+	                  key == XK_KP_Prior || key == XK_KP_Next)) {
+		tsearchpage(key == XK_Next || key == XK_KP_Next ? 1 : -1);
+		redraw();
+		return 1;
+	}
+	if ((key == XK_BackSpace || key == XK_Delete || key == XK_KP_Delete) && !mods) {
+		if (searchlen) {
+			do {
+				searchlen--;
+			} while (searchlen && ((uchar)searchtext[searchlen] & 0xc0) == 0x80);
+			searchtext[searchlen] = '\0';
+			tsearchset(searchtext);
+		}
+	} else if (mods == ControlMask && lower == XK_u) {
+		searchlen = 0;
+		searchtext[0] = '\0';
+		tsearchset(searchtext);
+	} else if (!(mods & ~(ShiftMask | Mod5Mask | XK_SWITCH_MOD)) && len > 0) {
+		/* AltGr commonly uses Mod5 for third/fourth-level text. */
+		searchinsert(text, len);
+		return 1;
+	}
+	redraw();
+	return 1;
+}
+
+/* Key caps in the search bar, in groups for the same action. */
+static const char *searchkeys[][2] = {
+	{ "\u2191", "\u2193" }, { "PgUp", "PgDn" }, { "Home", "End" }, { "Enter" },
+	{ "Esc" },
+};
+
+static XRenderColor
+rgbvalue(unsigned int rgb)
+{
+	return (XRenderColor){ .red = ((rgb >> 16) & 255) * 257,
+	                       .green = ((rgb >> 8) & 255) * 257,
+	                       .blue = (rgb & 255) * 257, .alpha = 0xffff };
+}
+
+static uint
+rgbtruecolor(unsigned int rgb)
+{
+	return TRUECOLOR((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255);
+}
+
+/* A color from config.h to draw text in, allocated once. */
+static Color *
+rgbcolor(unsigned int rgb)
+{
+	static struct RgbColor {
+		struct RgbColor *next;
+		unsigned int rgb;
+		Color color;
+	} *colors;
+	struct RgbColor *c;
+	XRenderColor value = rgbvalue(rgb);
+
+	for (c = colors; c; c = c->next)
+		if (c->rgb == rgb)
+			return &c->color;
+	c = xmalloc(sizeof(*c));
+	if (!XftColorAllocValue(xw.dpy, xw.vis, xw.cmap, &value, &c->color)) {
+		free(c);
+		return xnearestcolor(&value);
+	}
+	c->rgb = rgb;
+	c->next = colors;
+	colors = c;
+	return &c->color;
+}
+
+/* Columns group i takes: each key cap with a cell on either side, a cell
+ * apart. Draw it at col if asked, as tall as the field. */
+static int
+searchcaps(int i, int col, int draw, Color *fg)
+{
+	int k, w, x = col;
+	XRenderColor fill = rgbvalue(searchkeycolor);
+
+	for (k = 0; k < 2 && searchkeys[i][k]; k++) {
+		w = pastewidth(searchkeys[i][k]);
+		if (draw) {
+			pastedrawkey(&fill, x + 1, w, 0, 1);
+			pastedrawline(searchkeys[i][k], x + 1, 0, w, fg);
+		}
+		x += w + 3;
+	}
+	return x - 1 - col;
+}
+
+/* Draw the query, status and key caps in a padded search bar. Drop key groups
+ * in priority order until the field fits its hint. Move the bar to the top
+ * if it would cover the current match; pasteshift places text off the grid. */
+static void
+searchdraw(void)
+{
+	/* The order in which groups of keys are dropped. */
+	static const int drop[] = { 3, 2, 1, 4, 0 };
+	static const char hint[] = "Type to search scrollback ...";
+	/* The field fits the hint and the padding either side of it. */
+	enum { FIELDMIN = sizeof(hint) - 1 + 2, CAPGAP = 2 };
+	const char *tail = searchtext;
+	char status[32] = "", first[2] = { hint[0] };
+	XRenderColor bar = rgbvalue(searchbarcolor);
+	XRenderColor outline = rgbvalue(searchbaroutlinecolor);
+	XRenderColor sunk = rgbvalue(searchfieldcolor);
+	XRenderColor cursor = rgbvalue(searchcursorcolor);
+	Rune u;
+	size_t i, n;
+	int cols = win.tw / win.cw, rows = win.th / win.ch;
+	int shown[LEN(searchkeys)];
+	int full, field, pad, fieldw, room, capsw, width = 0, statusw, count, index;
+	int ft, b, h, top, y, x, k, covered = 0;
+
+	if (!tsearchactive() || cols < 1 || rows < 1)
+		return;
+	/* A cell of padding at the right end, before the field and inside it,
+	 * given room. */
+	full = cols >= FIELDMIN + 2;
+	field = pad = full;
+	for (i = 0; i < LEN(shown); i++)
+		shown[i] = 1;
+	for (k = 0;; k++) {
+		capsw = 0;
+		for (i = 0; i < LEN(searchkeys); i++)
+			if (shown[i])
+				capsw += CAPGAP + searchcaps(i, 0, 0, NULL);
+		fieldw = cols - field - pad - capsw;
+		if (!full || fieldw >= FIELDMIN || k == LEN(drop))
+			break;
+		shown[drop[k]] = 0;
+	}
+	if (!full)
+		capsw = 0, fieldw = cols;
+
+	count = tsearchcount(&index);
+	if (searchlen && count > 0)
+		snprintf(status, sizeof(status), "%d/%d", index, count);
+	else if (searchlen && count == 0)
+		snprintf(status, sizeof(status), "No match");
+	room = MAX(0, fieldw - 2 * pad - 1); /* less the cursor */
+	statusw = strlen(status);
+	if (statusw && room >= statusw + 5)
+		room -= statusw + 1;
+	else
+		statusw = 0;
+	for (i = 0; i < searchlen; i += n) {
+		n = pasteutf8(searchtext + i, searchlen - i, &u);
+		width += MAX(1, wcwidth(u));
+	}
+	while (width > room && *tail) {
+		n = pasteutf8(tail, strlen(tail), &u);
+		width -= MAX(1, wcwidth(u));
+		tail += n;
+	}
+
+	/* The field reaches up like the paste preview's, and the bar extends
+	 * past it by b, unless the window is too short for that. */
+	ft = pastefieldtop();
+	b = MAX(2, win.ch / 4);
+	h = ft + win.ch + 2 * b;
+	if (h > win.h)
+		ft = b = 0, h = win.ch;
+	/* Move the bar to the top if it would cover the match, including in
+	 * live output. */
+	top = win.h - h;
+	for (y = MAX(0, (top - borderpx) / win.ch); y < rows && !covered; y++)
+		for (x = 0; x < cols && !covered; x++)
+			covered = tsearchmatch(x, y) == SEARCH_CURRENT;
+	if (covered)
+		top = 0;
+	y = top + b + ft;
+	pasteshift = y - borderpx;
+
+	pasteblend(&bar, 0xffff, 0, top, win.w, h);
+	/* An outline on the side facing the terminal, as the boxes have. */
+	pasteblend(&outline, 0x9000, 0, top ? top - 1 : h, win.w, 1);
+	pasteblend(&sunk, 0x4000, borderpx + field * win.cw, y - ft,
+	           fieldw * win.cw, win.ch + ft);
+	x = field + pad + width;
+	if (searchlen)
+		pastedrawline(tail, field + pad, 0, room, rgbcolor(searchtextcolor));
+	else
+		pastedrawline(hint, x, 0, room + 1, rgbcolor(searchhintcolor));
+	if (width < fieldw - 2 * pad) {
+		pasteblend(&cursor, 0xffff, borderpx + x * win.cw, y, win.cw, win.ch);
+		if (!searchlen)
+			pastedrawline(first, x, 0, 1, rgbcolor(searchcursortextcolor));
+	}
+	if (statusw)
+		pastedrawline(status, field + fieldw - pad - statusw, 0, statusw,
+		              rgbcolor(count ? searchstatuscolor : searchnomatchcolor));
+	for (i = 0, x = field + fieldw; i < LEN(searchkeys); i++) {
+		if (shown[i] && capsw) {
+			x += CAPGAP;
+			x += searchcaps(i, x, 1, rgbcolor(searchkeytextcolor));
+		}
+	}
+	pasteshift = 0;
+}
+
 void
 numlock(const Arg *dummy)
 {
@@ -606,7 +895,7 @@ bpress(XEvent *e)
 		a.i = MAX(1, mousescrolllines);
 		xsel.clicks = 0;
 		/* Not even its release reaches a binding beneath them. */
-		if (pastemodal())
+		if (pastemodal() || tsearchactive())
 			mouseignored |= buttonmask(btn);
 		if (pastewheel(btn == Button4 ? -a.i : a.i))
 			return;
@@ -631,6 +920,10 @@ bpress(XEvent *e)
 			mouseignored |= buttonmask(btn);
 			pastemouse(e);
 		}
+		return;
+	}
+	if (tsearchactive()) {
+		mouseignored |= buttonmask(btn);
 		return;
 	}
 
@@ -2544,7 +2837,7 @@ vbellrender(double progress)
 	int bell = vbellset && depth >= 1 && vbellwidth && vbellopacity > 0 &&
 	           (!vbellanimated() || progress < 1);
 
-	if (!bell && !pastemodal())
+	if (!bell && !pastemodal() && !tsearchactive())
 		return xw.buf;
 	progress = MAX(0, MIN(1, progress));
 	if (!vbell.buf) {
@@ -2560,14 +2853,15 @@ vbellrender(double progress)
 
 	/* Always start from normal content, including text/cursor updates. */
 	XCopyArea(xw.dpy, xw.buf, vbell.buf, dc.gc, 0, 0, win.w, win.h, 0, 0);
+	draw = xw.draw;
+	xw.draw = vbell.draw;
+	if (tsearchactive())
+		searchdraw();
 	/* Both overlays share the presentation pixmap. The terminal buffer
 	 * stays untouched, so dirty-line drawing works while a dialog is open. */
-	if (pastemodal()) {
-		draw = xw.draw;
-		xw.draw = vbell.draw;
+	if (pastemodal())
 		pastedraw();
-		xw.draw = draw;
-	}
+	xw.draw = draw;
 	if (!bell)
 		return vbell.buf;
 	if (vbelleffect == VBELL_WAVE || vbelleffect == VBELL_RIPPLE) {
@@ -2679,7 +2973,7 @@ void
 xdrawline(Line line, int x1, int y1, int x2)
 {
 	int i, x, ox, numspecs;
-	int url = 0, newurl;
+	int url = 0, newurl, match;
 	Glyph base, new;
 	XftGlyphFontSpec *specs = xw.specbuf;
 
@@ -2694,6 +2988,13 @@ xdrawline(Line line, int x1, int y1, int x2)
 			new.mode |= ATTR_URL;
 		if (selected(x, y1))
 			new.mode ^= ATTR_REVERSE;
+		if ((match = tsearchmatch(x, y1))) {
+			new.fg = rgbtruecolor(match == SEARCH_CURRENT ? searchmatchtextcolor :
+			                      searchothermatchtextcolor);
+			new.bg = rgbtruecolor(match == SEARCH_CURRENT ? searchmatchcolor :
+			                      searchothermatchcolor);
+			new.mode &= ~(ATTR_REVERSE | ATTR_BLINK | ATTR_FAINT | ATTR_INVISIBLE);
+		}
 		if (i > 0 && (ATTRCMP(base, new) || url != newurl)) {
 			xdrawglyphfontspecs(specs, base, i, ox, y1);
 			specs += i;
@@ -2729,8 +3030,9 @@ xfinishdraw(void)
 	/* If the overlay could not be set up, reuse the terminal's drawing
 	 * context on the window. A modal dialog must stay visible, and drawing
 	 * it here still leaves the terminal buffer clean for the next frame. */
-	if (frame == xw.buf && pastemodal()) {
+	if (frame == xw.buf && (pastemodal() || tsearchactive())) {
 		XftDrawChange(xw.draw, xw.win);
+		searchdraw();
 		pastedraw();
 		XftDrawChange(xw.draw, xw.buf);
 	}
@@ -2923,6 +3225,8 @@ kpress(XEvent *ev)
 		len = XLookupString(e, buf, sizeof buf, &ksym, NULL);
 	}
 	if (pastekey(ksym, e->state))
+		return;
+	if (searchkey(ksym, e->state, buf, len))
 		return;
 	/* 1. shortcuts */
 	for (bp = shortcuts; bp < shortcuts + LEN(shortcuts); bp++) {

@@ -325,6 +325,25 @@ typedef struct
 } Scrollback;
 
 static Scrollback sb;
+typedef struct {
+	uint64_t row;
+	int x;
+} SearchPos;
+
+static struct {
+	int active, found, len, refresh, originlive;
+	int count, index; /* total matches and current 1-based match index */
+	Rune query[SEARCH_MAX];
+	int failure[SEARCH_MAX];
+	uint64_t origin;
+	SearchPos start, end;
+	/* Cells of every match in view, as of the last frame. */
+	uchar *marks, *newmarks;
+	int markrows, markcols, marked;
+} search;
+
+static void searchvalidate(void);
+static void searchmarks(void);
 static regex_t *selpatterns; /* compiled selectionpatterns */
 static int nselpatterns;
 
@@ -885,6 +904,377 @@ renderline(int y)
 	Line line = viewline(y);
 
 	return line ? line : emptyline();
+}
+
+/* Search positions use the same row order as viewline(): history, main
+ * screen, then the alternate screen when present. Absolute rows follow
+ * retained text while new output moves it into and through the ring. */
+static uint64_t
+searchtop(void)
+{
+	return sb.base + sb_maxoffset() - sb.view_offset;
+}
+
+static int
+searchcmp(SearchPos a, SearchPos b)
+{
+	if (a.row != b.row)
+		return a.row < b.row ? -1 : 1;
+	return (a.x > b.x) - (a.x < b.x);
+}
+
+static void
+searchview(uint64_t top)
+{
+	uint64_t oldtop = searchtop(), bottom = sb.base + sb_maxoffset();
+
+	top = MAX(sb.base, MIN(top, bottom));
+	sb.view_offset = bottom - top;
+	selscrollback(sb_startdelta(oldtop, top));
+	sb_view_changed();
+}
+
+int
+tsearchactive(void)
+{
+	return search.active;
+}
+
+int
+tsearchfound(void)
+{
+	return search.found;
+}
+
+void
+tsearchstart(void)
+{
+	search.active = 1;
+	search.found = search.len = search.refresh = search.count = 0;
+	search.origin = searchtop();
+	search.originlive = sb.view_offset == 0;
+	tfulldirt();
+}
+
+void
+tsearchend(int cancel)
+{
+	if (!search.active)
+		return;
+	search.active = search.found = search.refresh = 0;
+	if (cancel)
+		searchview(search.originlive ? sb.base + sb_maxoffset() : search.origin);
+	tfulldirt();
+}
+
+/* Feed one character to the matcher, ready for overlapping matches. Return
+ * whether it completed a match. */
+static int
+searchfeed(Rune u, int *matched)
+{
+	while (*matched && u != search.query[*matched])
+		*matched = search.failure[*matched - 1];
+	if (u == search.query[*matched])
+		(*matched)++;
+	if (*matched != search.len)
+		return 0;
+	*matched = search.failure[*matched - 1];
+	return 1;
+}
+
+/* Find the nearest match past pivot in direction, wrapping around if
+ * asked, or else keeping the current match if there is none. Return
+ * whether there was one past pivot. Scan once using KMP, including
+ * overlapping matches. Only a query-sized ring of positions is needed; the
+ * retained history is never flattened or expanded. Hard breaks reset the
+ * matcher, soft wraps do not. */
+static int
+searchscan(int direction, SearchPos pivot, int canwrap)
+{
+	SearchPos positions[SEARCH_MAX], start, end;
+	SearchPos best = {0}, bestend = {0}, wrap = {0}, wrapend = {0};
+	Line line;
+	uint64_t top;
+	int y, x, width, matched = 0, slot = 0, havebest = 0, havewrap = 0;
+	int relative, better, total = sb_maxoffset() + term.row;
+	int count = 0, before = 0, upto = 0;
+
+	if (!search.active || !search.len)
+		return 0;
+	for (y = 0; y < total; y++) {
+		line = viewline(y - (sb_maxoffset() - sb.view_offset));
+		width = tlinelen(line);
+		for (x = 0; x < width; x++) {
+			if (line[x].mode & (ATTR_WDUMMY | ATTR_WPAD))
+				continue;
+			positions[slot] = (SearchPos){ sb.base + y, x };
+			slot = (slot + 1) % search.len;
+			if (!searchfeed(line[x].u, &matched))
+				continue;
+			start = positions[slot];
+			end = (SearchPos){ sb.base + y,
+				MIN(term.col - 1, x + !!(line[x].mode & ATTR_WIDE)) };
+			count++;
+			before += searchcmp(start, pivot) < 0;
+			upto += searchcmp(start, pivot) <= 0;
+			relative = searchcmp(start, pivot) * direction;
+			better = !havebest || searchcmp(start, best) * direction < 0;
+			if (relative > 0 && better) {
+				best = start;
+				bestend = end;
+				havebest = 1;
+			}
+			if (!havewrap || searchcmp(start, wrap) * direction < 0) {
+				wrap = start;
+				wrapend = end;
+				havewrap = 1;
+			}
+		}
+		if (!(line[term.col - 1].mode & ATTR_WRAP))
+			matched = 0;
+	}
+	if (!havebest && !canwrap)
+		return 0;
+	search.found = havebest || havewrap;
+	search.count = count;
+	/* The nearest match past the pivot, or wrapping, the first or last. */
+	if (direction < 0)
+		search.index = havebest ? before : count;
+	else
+		search.index = havebest ? upto + 1 : 1;
+	if (search.found) {
+		search.start = havebest ? best : wrap;
+		search.end = havebest ? bestend : wrapend;
+		/* Leave room for the prompt and context around the first row. */
+		top = search.start.row - MIN(search.start.row - sb.base,
+		                            (uint64_t)(term.row / 2));
+		searchview(top);
+	}
+	tfulldirt();
+	return havebest;
+}
+
+void
+tsearchnext(int direction)
+{
+	/* Without a current match, use the live edge or the retained view;
+	 * output may have moved or evicted the original cancellation point. */
+	uint64_t top = search.originlive ? sb.base + sb_maxoffset() : searchtop();
+
+	searchscan(direction < 0 ? -1 : 1, search.found ? search.start :
+	           (SearchPos){ top + term.row - 1, term.col }, 1);
+}
+
+/* Find the nearest match above the rows in view, or below them, skipping
+ * any in view. On the first or last page with matches, go to the first or
+ * last match instead. */
+void
+tsearchpage(int direction)
+{
+	int found;
+
+	if (direction < 0)
+		found = searchscan(-1, (SearchPos){ searchtop(), -1 }, 0);
+	else
+		found = searchscan(1, (SearchPos){ searchtop() + term.row - 1,
+		                                   term.col }, 0);
+	if (!found)
+		tsearchedge(direction > 0);
+}
+
+/* Find the first match in the history, or the last. */
+void
+tsearchedge(int last)
+{
+	if (last)
+		searchscan(-1, (SearchPos){ UINT64_MAX, INT_MAX }, 1);
+	else
+		searchscan(1, (SearchPos){ 0, -1 }, 1);
+}
+
+void
+tsearchset(const char *text)
+{
+	Rune u, composed;
+	size_t i = 0, n, bytes = strlen(text);
+	int j, k, width;
+
+	search.len = search.found = search.refresh = search.count = 0;
+	while (i < bytes && (size_t)search.len < LEN(search.query)) {
+		n = utf8decode(text + i, &u, bytes - i);
+		if (!n)
+			break;
+		i += n;
+		/* Like tputc()/tcombine(), only merge zero-width characters
+		 * when the composed form preserves the previous cell's width.
+		 * Unknown-width runes also occupy a cell in terminal output. */
+		width = wcwidth(u);
+		if (width != 0)
+			search.query[search.len++] = u;
+		else if (search.len &&
+		         (composed = compose(search.query[search.len - 1], u)) &&
+		         wcwidth(composed) == wcwidth(search.query[search.len - 1]))
+			search.query[search.len - 1] = composed;
+	}
+	for (j = 1, k = 0; j < search.len; j++) {
+		while (k && search.query[j] != search.query[k])
+			k = search.failure[k - 1];
+		if (search.query[j] == search.query[k])
+			k++;
+		search.failure[j] = k;
+	}
+	search.failure[0] = 0;
+	searchview(search.originlive ? sb.base + sb_maxoffset() : search.origin);
+	tsearchnext(-1);
+	tfulldirt();
+}
+
+/* How many matches the last scan found, and in *index which of them,
+ * counting from the top of the history, is the current one. A negative
+ * count means output changed the results and navigation must recount. */
+int
+tsearchcount(int *index)
+{
+	*index = search.found ? search.index : 0;
+	return search.found || search.count < 0 ? search.count : 0;
+}
+
+/* SEARCH_CURRENT if the cell in view at x, y is in the current match,
+ * SEARCH_OTHER if it is in another one in view, otherwise 0. */
+int
+tsearchmatch(int x, int y)
+{
+	SearchPos p = { searchtop() + y, x };
+
+	if (!search.active)
+		return 0;
+	if (search.found && searchcmp(p, search.start) >= 0 &&
+	    searchcmp(p, search.end) <= 0)
+		return SEARCH_CURRENT;
+	if (search.marks && y >= 0 && y < search.markrows && x >= 0 &&
+	    x < search.markcols && search.marks[y * search.markcols + x])
+		return SEARCH_OTHER;
+	return 0;
+}
+
+/* Mark the cells of every match in view for the next frame, scanning only
+ * the rows in view and the soft-wrapped rows around them that a match
+ * crossing an edge could reach. Rows whose marks change are redrawn,
+ * including ones output did not touch, e.g. when a match is completed on
+ * the row below. */
+static void
+searchmarks(void)
+{
+	struct { int y, x, wide; } cells[SEARCH_MAX];
+	Line line;
+	size_t size = (size_t)term.row * term.col;
+	uchar *swap;
+	int reach, first, last, width, y, x, i, matched = 0, slot = 0;
+
+	/* Outside search, there is only something to do once, to clear. */
+	if (!(search.active && search.len) && !search.marked)
+		return;
+	if (search.markrows != term.row || search.markcols != term.col) {
+		free(search.marks);
+		free(search.newmarks);
+		search.marks = xmalloc(size);
+		search.newmarks = xmalloc(size);
+		memset(search.marks, 0, size);
+		search.markrows = term.row;
+		search.markcols = term.col;
+		tfulldirt();
+	}
+	memset(search.newmarks, 0, size);
+	search.marked = search.active && search.len;
+	if (search.marked) {
+		/* A wide character takes two cells for one in the query. */
+		reach = (2 * search.len + term.col - 1) / term.col;
+		for (first = 0; first > -reach && (line = viewline(first - 1)) &&
+		     (line[term.col - 1].mode & ATTR_WRAP); first--)
+			;
+		for (last = term.row - 1; last < term.row - 1 + reach &&
+		     (line = viewline(last)) && (line[term.col - 1].mode & ATTR_WRAP) &&
+		     viewline(last + 1); last++)
+			;
+		for (y = first; y <= last; y++) {
+			if (!(line = viewline(y)))
+				continue;
+			width = tlinelen(line);
+			for (x = 0; x < width; x++) {
+				if (line[x].mode & (ATTR_WDUMMY | ATTR_WPAD))
+					continue;
+				cells[slot].y = y;
+				cells[slot].x = x;
+				cells[slot].wide = (line[x].mode & ATTR_WIDE) && x + 1 < term.col;
+				slot = (slot + 1) % search.len;
+				if (!searchfeed(line[x].u, &matched))
+					continue;
+				/* The ring holds just the match's cells. */
+				for (i = 0; i < search.len; i++) {
+					if (cells[i].y < 0 || cells[i].y >= term.row)
+						continue;
+					if (!search.found)
+						search.count = -1;
+					search.newmarks[cells[i].y * term.col + cells[i].x] = 1;
+					if (cells[i].wide)
+						search.newmarks[cells[i].y * term.col + cells[i].x + 1] = 1;
+				}
+			}
+			if (!(line[term.col - 1].mode & ATTR_WRAP))
+				matched = 0;
+		}
+	}
+	for (y = 0; y < term.row; y++)
+		if (memcmp(search.marks + y * term.col, search.newmarks + y * term.col,
+		           term.col))
+			term.dirty[y] = 1;
+	swap = search.marks;
+	search.marks = search.newmarks;
+	search.newmarks = swap;
+}
+
+/* Output can overwrite or evict the chosen text. Check only that match on
+ * redraw; rescanning all history on every output frame would stall a busy
+ * terminal. Navigation and edits always search the current contents. */
+static void
+searchvalidate(void)
+{
+	Line line;
+	uint64_t row, top = searchtop();
+	int x, i = 0, valid = 1;
+
+	if (!search.active)
+		return;
+	if (search.refresh) {
+		search.refresh = search.found = 0;
+		search.origin = top;
+		search.originlive = sb.view_offset == 0;
+		tsearchnext(-1);
+	}
+	if (!search.found)
+		return;
+	if (search.start.row < sb.base ||
+	    search.end.row >= sb.base + sb_maxoffset() + term.row)
+		valid = 0;
+	for (row = search.start.row; valid && row <= search.end.row; row++) {
+		line = viewline((int)(row - sb.base) - (sb_maxoffset() - sb.view_offset));
+		for (x = row == search.start.row ? search.start.x : 0;
+		     x < term.col && (row < search.end.row || x <= search.end.x); x++) {
+			if (line[x].mode & (ATTR_WDUMMY | ATTR_WPAD))
+				continue;
+			if (i >= search.len || line[x].u != search.query[i++]) {
+				valid = 0;
+				break;
+			}
+		}
+		if (row < search.end.row && !(line[term.col - 1].mode & ATTR_WRAP))
+			valid = 0;
+	}
+	if (!valid || i != search.len) {
+		search.found = 0;
+		search.count = -1;
+		tfulldirt();
+	}
 }
 
 /* Accept "scheme://", where a scheme is a letter then [A-Za-z0-9+.-]. */
@@ -2295,6 +2685,9 @@ tresetstate(void)
 void
 treset(void)
 {
+	free(search.marks);
+	free(search.newmarks);
+	memset(&search, 0, sizeof(search));
 	tresetstate();
 	sb_clear();
 	if (sel.ob.x != -1 && term.row > 0)
@@ -2316,6 +2709,8 @@ tswapscreen(void)
 {
 	Line *tmp = term.line;
 	int alt = IS_SET(MODE_ALTSCREEN), top = sb_maxoffset() - sb.view_offset;
+
+	search.refresh = 1;
 
 	if (!alt)
 		term.mainc = term.c;
@@ -4286,6 +4681,7 @@ tresize(int col, int row)
 	}
 	if (col == term.col && row == term.row)
 		return;
+	search.refresh = 1;
 	/* Reflow moves text between rows, so a selection would cover other text. */
 	selclear();
 
@@ -4484,6 +4880,8 @@ draw(void)
 
 	if (!xstartdraw())
 		return;
+	searchvalidate();
+	searchmarks();
 	urlupdate();
 
 	/* adjust cursor position */
@@ -4495,7 +4893,7 @@ draw(void)
 		cx--;
 
 	drawregion(0, 0, term.col, term.row);
-	if (sb.view_offset == 0) {
+	if (sb.view_offset == 0 && !search.active) {
 		xdrawcursor(cx, term.c.y, term.line[term.c.y][cx],
 		            term.ocx, term.ocy, term.line[term.ocy][term.ocx]);
 		term.ocx = cx;

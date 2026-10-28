@@ -15,6 +15,13 @@ testmouse_put(const char *text)
 	twrite(text, strlen(text), 0);
 }
 
+void
+testmouse_searchframe(void)
+{
+	searchvalidate();
+	searchmarks();
+}
+
 int
 testmouse_alldirty(void)
 {

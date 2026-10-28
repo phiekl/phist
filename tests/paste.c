@@ -10,6 +10,7 @@
 
 void testmouse_init(int, int, int);
 void testmouse_put(const char *);
+void testmouse_searchframe(void);
 int testmouse_alldirty(void);
 void testmouse_cleardirty(void);
 int testmouse_offset(void);
@@ -27,6 +28,7 @@ typedef struct {
 static Property properties[4];
 static int propertycount, propertyindex, requests, deletes, attributes;
 static KeySym lookupkey;
+static const char *lookuptext = "x";
 static Atom requested, requestedproperty;
 static Time requestedtime;
 static Window requestedwindow;
@@ -140,8 +142,9 @@ int
 XLookupString(XKeyEvent *e, char *buf, int size, KeySym *key, XComposeStatus *status)
 {
 	*key = lookupkey;
-	buf[0] = 'x';
-	return 1;
+	assert(strlen(lookuptext) <= size);
+	memcpy(buf, lookuptext, strlen(lookuptext));
+	return strlen(lookuptext);
 }
 
 /* A mouse binding that is not a paste, e.g. one sending Enter. */
@@ -2636,6 +2639,367 @@ testclipfailure(void)
 	puts("PASS: a preview line that can't be clipped isn't drawn");
 }
 
+static void
+testsearchinput(int fd)
+{
+	char longquery[SEARCH_MAX + 32];
+	int fault, before, index;
+
+	resizewindow(80, 5);
+	tresize(80, 5);
+	testmouse_put("\033[?5l\033[?2004h\033[Hneedle\r\nneedle");
+	press(XK_slash, ControlMask | Mod2Mask);
+	assert(tsearchactive() && !searchlen);
+	/* While the field is empty it shows a hint, the cursor on its first
+	 * letter. The bar is padded off the cell grid, so its text is painted
+	 * on row 3 of 5. */
+	presentframe();
+	assert(dialogrow(" Type to search scrollback ... ") == 3);
+	assert(painted[3][2] == 'T' && ink[3][2] == pixel(PASTE_BLUE));
+	assert(painted[3][3] == 'y' && ink[3][3] == pixel(PASTE_PALE));
+	lookuptext = "needle";
+	press(XK_n, 0);
+	lookuptext = "x";
+	assert(!strcmp(searchtext, "needle") && tsearchfound());
+	assert(tsearchcount(&index) == 2 && index == 2);
+	press(XK_Up, 0);
+	assert(tsearchcount(&index) == 2 && index == 1);
+	press(XK_Down, 0);
+	assert(tsearchcount(&index) == 2 && index == 2);
+	press(XK_p, ControlMask);
+	assert(tsearchcount(&index) == 2 && index == 1);
+	press(XK_n, ControlMask);
+	assert(tsearchcount(&index) == 2 && index == 2);
+	/* Home and End go to the first and last match. */
+	press(XK_Home, 0);
+	assert(tsearchcount(&index) == 2 && index == 1);
+	press(XK_Home, 0);
+	assert(tsearchcount(&index) == 2 && index == 1);
+	press(XK_KP_End, Mod2Mask);
+	assert(tsearchcount(&index) == 2 && index == 2);
+	press(XK_KP_Home, 0);
+	press(XK_End, 0);
+	assert(tsearchcount(&index) == 2 && index == 2);
+	/* Both matches are on the one page, so Page Up and Down go to the
+	 * first and last. */
+	press(XK_Prior, 0);
+	assert(tsearchcount(&index) == 2 && index == 1);
+	press(XK_KP_Next, Mod2Mask);
+	assert(tsearchcount(&index) == 2 && index == 2);
+	expect(fd, NULL);
+
+	/* The bar survives redraws and allocation failures without altering
+	 * the underlying terminal pixmap. */
+	framepixels[xw.buf] = 0x204060;
+	for (fault = 0; fault < 4; fault++) {
+		vbellfree();
+		failpixmap = fault == 0;
+		faildraw = fault == 1;
+		failpicture = fault == 2;
+		presentframe();
+		assert(dialogrow("Type") == -1);
+		assert(dialogrow("  needle ") == 3 && dialogrow(" 2/2  ") == 3);
+		assert(dialogrow(" \u2191   \u2193    PgUp   PgDn    Home   End    Esc  ") == 3);
+		assert(framepixels[xw.buf] == 0x204060);
+		assert(maindrawable == xw.buf && xw.draw == (Draw)xw.buf);
+	}
+	failpixmap = faildraw = failpicture = 0;
+	/* Like the paste dialog: the query in a sunken field reaching up as the
+	 * preview's does, wide enough for the hint, a block cursor after it,
+	 * and the keys on raised key caps as tall as the field, here Home's
+	 * from column 60. Enter's does not fit. The bar is
+	 * padded by a quarter of a cell around them, at the window's bottom. */
+	presentframe();
+	{
+		int k, ft = pastefieldtop(), b = win.ch / 4, y = win.h - b - win.ch;
+		int bar = 0, field = 0, caps = 0, cursor = 0, home = 0;
+
+		for (k = 0; k < nblends; k++) {
+			bar += blends[k].alpha == 0xffff && !blends[k].x &&
+			       blends[k].w == win.w && blends[k].y == y - ft - b &&
+			       blends[k].h == ft + win.ch + 2 * b &&
+			       blends[k].blue == pastevalues[PASTE_BLUE].blue;
+			field += blends[k].alpha == 0x4000 && !blends[k].red &&
+			         blends[k].x == win.cw && blends[k].w == 33 * win.cw &&
+			         blends[k].y == y - ft && blends[k].h == win.ch + ft;
+			caps += blends[k].alpha == 0x4000 && blends[k].red == 0x4000 &&
+			        blends[k].y == y - ft;
+			home += blends[k].alpha == 0x4000 && blends[k].red == 0x4000 &&
+			        blends[k].x == 60 * win.cw && blends[k].w == 6 * win.cw;
+			cursor += blends[k].alpha == 0xffff && blends[k].red == 0xffff &&
+			          blends[k].blue == 0xffff && blends[k].x == 8 * win.cw &&
+			          blends[k].y == y && blends[k].w == win.cw &&
+			          blends[k].h == win.ch;
+		}
+		assert(bar == 1 && field == 1 && caps == 7 && home == 1 && cursor == 1);
+	}
+	/* A match under the bar, even its padding, moves it to the top. */
+	testmouse_put("\033[4;1Hneedle");
+	press(XK_Down, 0);
+	assert(tsearchcount(&index) == 3 && index == 3);
+	presentframe();
+	assert(dialogrow(" 3/3  ") == 0);
+	testmouse_put("\033[4;1H\033[2K");
+	press(XK_Up, 0);
+	/* Wider windows show every key; narrower ones drop Enter's key cap,
+	 * then Home and End's, the page keys', Esc's and the arrows', before
+	 * the hint would not fit; tiny ones show only the query. */
+	resizewindow(90, 5);
+	presentframe();
+	assert(dialogrow(" \u2191   \u2193    PgUp   PgDn    Home   End    Enter    Esc  ") == 3);
+	resizewindow(66, 5);
+	presentframe();
+	assert(dialogrow("\u2193    PgUp   PgDn    Esc  ") == 3 && dialogrow("Home") == -1);
+	resizewindow(52, 5);
+	presentframe();
+	assert(dialogrow("\u2193    Esc  ") == 3 && dialogrow("PgUp") == -1);
+	resizewindow(40, 5);
+	presentframe();
+	assert(dialogrow("  needle ") == 3 && dialogrow("\u2193") == -1);
+	resizewindow(20, 5);
+	presentframe();
+	assert(dialogrow("needle           2/2") == 3);
+	resizewindow(10, 5);
+	presentframe();
+	assert(dialogrow("eedle  2/2") == 3);
+	resizewindow(1, 1);
+	presentframe();
+	resizewindow(80, 5);
+
+	/* Clipboard input belongs to the query even in bracketed-paste mode.
+	 * Enter keeps the view and does not send an Enter to the child. */
+	press(XK_u, ControlMask);
+	presentframe();
+	assert(dialogrow(" Type to search scrollback ... ") == 3);
+	transfer("needle", 6);
+	assert(!strcmp(searchtext, "needle") && paste.state == PASTE_IDLE);
+	press(XK_Return, 0);
+	assert(!tsearchactive());
+	expect(fd, NULL);
+	press(XK_x, 0);
+	expect(fd, "x");
+
+	/* Ctrl+/ also works on layouts where slash requires Shift. UTF-8
+	 * backspace removes a whole character, and the query stays bounded. */
+	press(XK_slash, ControlMask | ShiftMask);
+	lookuptext = "\347\225\214\303\251";
+	press(XK_eacute, 0);
+	lookuptext = "x";
+	assert(searchlen == 5);
+	press(XK_BackSpace, 0);
+	assert(searchlen == 3 && !strcmp(searchtext, "\347\225\214"));
+	press(XK_BackSpace, 0);
+	assert(!searchlen);
+	memset(longquery, 'x', sizeof(longquery));
+	searchinsert(longquery, sizeof(longquery));
+	assert(searchlen == SEARCH_MAX - 1 && !searchtext[searchlen]);
+	presentframe();
+	assert(dialogrow("xxx  No match  ") == 3);
+	press(XK_Escape, 0);
+	assert(!tsearchactive());
+	expect(fd, NULL);
+
+	/* Abandoning an outstanding selection must not paste into the child
+	 * after search ends. Mouse releases cannot trigger paste underneath. */
+	press(XK_slash, ControlMask);
+	before = requests;
+	mouseat(ButtonPress, Button2, 0, 0);
+	mouseat(ButtonRelease, Button2, 0, 0);
+	assert(requests == before);
+	{
+		uint button = mshortcuts[0].button;
+		int calls = mousecalls;
+
+		mshortcuts[0].func = othermouse;
+		mshortcuts[0].button = Button4;
+		wheel(Button4);
+		assert(mousecalls == calls);
+		mshortcuts[0].func = selpaste;
+		mshortcuts[0].button = button;
+	}
+	press(XK_V, TERMMOD);
+	assert(paste.state == PASTE_WAIT);
+	press(XK_Escape, 0);
+	assert(!tsearchactive() && paste.state == PASTE_IDLE);
+	{
+		XEvent late = { .xselection = { .type = SelectionNotify,
+		               .requestor = requestedwindow, .selection = requested,
+		               .target = xsel.xtarget, .property = requestedproperty,
+		               .time = requestedtime } };
+		selnotify(&late);
+	}
+	expect(fd, NULL);
+
+	/* Confirmed multiline data uses the chosen paste transformation. */
+	press(XK_slash, ControlMask);
+	transfer("needle\nneedle", 13);
+	assert(paste.state == PASTE_CONFIRM);
+	press(XK_s, 0);
+	assert(!strcmp(searchtext, "needle needle"));
+	assert(tsearchactive() && paste.state == PASTE_IDLE);
+	press(XK_c, ControlMask);
+	assert(!tsearchactive());
+	expect(fd, NULL);
+
+	/* With Caps Lock, Ctrl+U, Ctrl+P/N and Ctrl+C report uppercase keys. */
+	press(XK_slash, ControlMask);
+	searchinsert("needle", 6);
+	press(XK_U, ControlMask | LockMask);
+	assert(!searchlen);
+	searchinsert("needle", 6);
+	press(XK_P, ControlMask | LockMask);
+	press(XK_N, ControlMask | LockMask);
+	assert(tsearchfound() && searchlen == 6);
+	press(XK_C, ControlMask | LockMask);
+	assert(!tsearchactive());
+	expect(fd, NULL);
+
+	/* AltGr uses Mod5 on common layouts, with Shift for fourth-level
+	 * symbols. Its text belongs to the query, never to the child. */
+	press(XK_slash, ControlMask);
+	lookuptext = "@";
+	press(XK_at, Mod5Mask);
+	lookuptext = "{";
+	press(XK_braceleft, Mod5Mask | ShiftMask);
+	lookuptext = "x";
+	assert(!strcmp(searchtext, "@{"));
+	press(XK_x, ControlMask | Mod5Mask);
+	press(XK_x, Mod1Mask | Mod5Mask);
+	assert(!strcmp(searchtext, "@{"));
+	press(XK_Escape, 0);
+	assert(!tsearchactive());
+	expect(fd, NULL);
+}
+
+static void
+testsearchunchanged(int fd)
+{
+	char query[SEARCH_MAX];
+	int index;
+
+	resizewindow(80, 5);
+	tresize(80, 5);
+	memset(query, 'a', sizeof(query) - 1);
+	query[sizeof(query) - 1] = '\0';
+	testmouse_put("\033[H\033[2J");
+	testmouse_put(query);
+	testmouse_put("\r\n");
+	testmouse_put(query);
+	press(XK_slash, ControlMask);
+	searchinsert(query, strlen(query));
+	press(XK_Up, 0);
+	assert(tsearchcount(&index) == 2 && index == 1);
+	lookuptext = "\t";
+	press(XK_Tab, 0);
+	assert(tsearchcount(&index) == 2 && index == 1);
+	lookuptext = "\177";
+	press(XK_BackSpace, ShiftMask);
+	assert(tsearchcount(&index) == 2 && index == 1);
+	lookuptext = "a";
+	press(XK_a, 0); /* The field is full, so this adds nothing either. */
+	assert(tsearchcount(&index) == 2 && index == 1);
+	assert(searchlen == sizeof(query) - 1 && !strcmp(query, searchtext));
+	press(XK_Escape, 0);
+	lookuptext = "x";
+	expect(fd, NULL);
+}
+
+static void
+testsearchstatus(void)
+{
+	int row, other = 0;
+
+	testmouse_put("\033[H\033[2Jstatusneedle\r\nstatusneedle");
+	searchstart(NULL);
+	searchinsert("statusneedle", 12);
+	testmouse_put("\rxxxxxxxxxxxx");
+	testmouse_searchframe();
+	for (row = 0; row < win.th / win.ch; row++)
+		other |= tsearchmatch(0, row) == SEARCH_OTHER;
+	assert(!tsearchfound() && other);
+	presentframe();
+	assert(dialogrow("No match") < 0 && dialogrow("2/2") < 0);
+	tsearchnext(-1);
+	presentframe();
+	assert(dialogrow("1/1") >= 0);
+	searchinsert("absent", 6);
+	presentframe();
+	assert(dialogrow("No match") >= 0);
+	press(XK_Escape, 0);
+}
+
+/* The search bar's settings, apart from those of paste dialogs. */
+static void
+testsearchcolors(void)
+{
+	int k, y, x, bar = 0, field = 0, cap = 0, cursor = 0, outline = 0;
+
+	lookuptext = "";
+	resizewindow(80, 5);
+	tresize(80, 5);
+	testmouse_put("\033[H\033[2Jpin");
+	searchbarcolor = 0x010203;
+	searchbaroutlinecolor = 0x040506;
+	searchfieldcolor = 0x070809;
+	searchtextcolor = 0x0a0b0c;
+	searchcursorcolor = 0x0d0e0f;
+	searchcursortextcolor = 0x101112;
+	searchhintcolor = 0x131415;
+	searchstatuscolor = 0x161718;
+	searchnomatchcolor = 0x191a1b;
+	searchkeycolor = 0x1c1d1e;
+	searchkeytextcolor = 0x1f2021;
+	searchstart(NULL);
+	presentframe();
+	y = dialogrow(" Type to search scrollback ... ");
+	assert(y >= 0 && ink[y][2] == 0x101112 && ink[y][3] == 0x131415);
+	for (k = 0; k < nblends; k++) {
+		bar += blends[k].alpha == 0xffff && blends[k].w == win.w &&
+		       blends[k].blue == 0x0303;
+		outline += blends[k].alpha == 0x9000 && blends[k].h == 1 &&
+		           blends[k].blue == 0x0606 * 0x9000 / 0xffff;
+		field += blends[k].alpha == 0x4000 &&
+		         blends[k].blue == 0x0909 * 0x4000 / 0xffff;
+		cap += blends[k].alpha == 0x4000 &&
+		       blends[k].blue == 0x1e1e * 0x4000 / 0xffff;
+		cursor += blends[k].alpha == 0xffff && blends[k].h == win.ch &&
+		          blends[k].blue == 0x0f0f;
+	}
+	assert(bar == 1 && outline == 1 && field == 1 && cap > 0 && cursor == 1);
+	for (x = 0; x < win.tw / win.cw; x++)
+		if (painted[y][x] == 'E')
+			assert(ink[y][x] == 0x1f2021);
+
+	lookuptext = "p";
+	press(XK_p, 0);
+	presentframe();
+	assert(painted[y][2] == 'p' && ink[y][2] == 0x0a0b0c);
+	for (x = 0; x < win.tw / win.cw && painted[y][x] != '/'; x++)
+		;
+	assert(ink[y][x] == 0x161718);
+	lookuptext = "zzz";
+	press(XK_z, 0);
+	presentframe();
+	assert(dialogrow("No match") == y);
+	for (x = 0; x < win.tw / win.cw && painted[y][x] != 'N'; x++)
+		;
+	assert(ink[y][x] == 0x191a1b);
+	press(XK_Escape, 0);
+
+	searchbarcolor = 0x2563eb;
+	searchbaroutlinecolor = 0x000000;
+	searchfieldcolor = 0x000000;
+	searchtextcolor = 0xffffff;
+	searchcursorcolor = 0xffffff;
+	searchcursortextcolor = 0x2563eb;
+	searchhintcolor = 0xb4c6f4;
+	searchstatuscolor = 0xb4c6f4;
+	searchnomatchcolor = 0xffd75f;
+	searchkeycolor = 0xffffff;
+	searchkeytextcolor = 0xffffff;
+	lookuptext = "x";
+}
+
 int
 main(void)
 {
@@ -2668,10 +3032,14 @@ main(void)
 	testclipfailure();
 	testdialog(sockets[1]);
 	testpresentationfallback(sockets[1]);
+	testsearchinput(sockets[1]);
+	testsearchunchanged(sockets[1]);
+	testsearchstatus();
+	testsearchcolors();
 	vbellfree();
 	free(display);
 	close(sockets[0]);
 	close(sockets[1]);
-	puts("PASS: control confirmation, sanitizing, UTF-8 preview, whole INCR transfers, ignored late replies, fixed paste mode, transfer limits/timeouts, dialog layout, navigation, asking before the original, full view and redraw");
+	puts("PASS: control confirmation, sanitizing, UTF-8 preview, whole INCR transfers, ignored late replies, fixed paste mode, transfer limits/timeouts, dialog layout, navigation, asking before the original, full view, redraw and search input");
 	return 0;
 }

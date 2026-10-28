@@ -142,6 +142,21 @@ char *xstrdup(const char *);
 void kscrollup(const Arg *arg);
 void kscrolldown(const Arg *arg);
 
+/* Search queries contain at most this many UTF-8 bytes, including NUL. */
+#define SEARCH_MAX 1024
+void tsearchstart(void);
+void tsearchend(int);
+void tsearchset(const char *);
+void tsearchnext(int);
+void tsearchedge(int);
+void tsearchpage(int);
+int tsearchactive(void);
+int tsearchfound(void);
+int tsearchcount(int *); /* -1 when output invalidated the last result */
+/* What tsearchmatch() returns for a cell in a match. */
+enum { SEARCH_OTHER = 1, SEARCH_CURRENT = 2 };
+int tsearchmatch(int, int);
+
 /* config.h globals */
 extern char *utmp;
 extern char *scroll;

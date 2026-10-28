@@ -151,6 +151,23 @@ static unsigned int vbellinnercolor = 0x000000;
 static unsigned int vbellwidth = 512;
 static double vbellopacity = 0.5;
 
+/* Search bar, query, status, key caps and match colors, as 0xRRGGBB. */
+static unsigned int searchbarcolor = 0x2563eb;
+static unsigned int searchbaroutlinecolor = 0x000000;
+static unsigned int searchfieldcolor = 0x000000;
+static unsigned int searchtextcolor = 0xffffff;
+static unsigned int searchcursorcolor = 0xffffff;
+static unsigned int searchcursortextcolor = 0x2563eb;
+static unsigned int searchhintcolor = 0xb4c6f4;
+static unsigned int searchstatuscolor = 0xb4c6f4;
+static unsigned int searchnomatchcolor = 0xffd75f;
+static unsigned int searchkeycolor = 0xffffff;
+static unsigned int searchkeytextcolor = 0xffffff;
+static unsigned int searchmatchcolor = 0xfff028;
+static unsigned int searchmatchtextcolor = 0x000000;
+static unsigned int searchothermatchcolor = 0x705818;
+static unsigned int searchothermatchtextcolor = 0xffe4a0;
+
 /* default TERM value */
 char *termname = "phist-256color";
 
@@ -268,6 +285,8 @@ static Shortcut shortcuts[] = {
 	{ XK_ANY_MOD,           XK_Print,       printsel,       {.i =  0} },
 	{ ShiftMask,            XK_Prior,       kscrollup,      {.i = -1} },
 	{ ShiftMask,            XK_Next,        kscrolldown,    {.i = -1} },
+	{ ControlMask,          XK_slash,       searchstart,    {.i =  0} },
+	{ ControlMask|ShiftMask, XK_slash,       searchstart,    {.i =  0} },
 	{ ControlMask,          XK_plus,        zoom,           {.f = +1} },
 	{ ControlMask|ShiftMask, XK_plus,       zoom,           {.f = +1} },
 	{ ControlMask,          XK_minus,       zoom,           {.f = -1} },

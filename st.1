@@ -158,6 +158,18 @@ Scroll history up by one screen minus one line.
 .B Shift-Page Down
 Scroll history down by one screen minus one line.
 .TP
+.B Ctrl-/
+Search scrollback and screen text as you type. Up/Down or Ctrl-P/Ctrl-N
+move between matches, wrapping at either end, and Home/End go to the first
+and last match. Page Up/Page Down go to the nearest match above or below
+the rows in view, or on the first or last page, to the first or last
+match. Enter keeps the result in
+view; Escape or Ctrl-C restores the previous view. Backspace or Delete
+removes the last character and Ctrl-U clears the query. Search is literal
+and case-sensitive, follows soft wraps and includes the main screen beneath
+alternate-screen programs.
+The bar shows the current match's number and the total, such as 2/5.
+.TP
 .B Ctrl-Plus or Ctrl-Shift-Plus
 Increase font size.
 .TP

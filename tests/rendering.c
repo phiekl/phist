@@ -13,6 +13,7 @@ static int recordglyphs;
 static Color glyphcolor, backgroundcolor;
 
 Line testrender_text(int, const char *);
+void testrender_marks(void);
 
 FT_UInt XftCharIndex(Display *d, XftFont *f, FcChar32 c) { return 1; }
 
@@ -391,6 +392,41 @@ main(void)
 		xdrawline(line, 0, 0, LEN(painted));
 		assert(painted[0] == colors[defaultbg].pixel);
 		assert(painted[2048] == colors[defaultfg].pixel);
+		/* Search colors stay visible over reversed, concealed and blinking
+		 * text, and never modify the terminal's stored glyph attributes.
+		 * The current match, the last, is bright yellow; others in view
+		 * are muted amber. */
+		line = testrender_text(20, "before \033[5;7;8mneedle\033[0m needle");
+		failalloc = 0;
+		tsearchstart();
+		tsearchset("needle");
+		testrender_marks();
+		win.mode |= MODE_BLINK;
+		xdrawline(line, 0, 0, 20);
+		for (i = 7; i <= 12; i++) {
+			assert(painted[i] == 0xfee39f && backgrounds[i] == 0x6f5717);
+			assert(line[i].mode & ATTR_REVERSE);
+			assert(line[i].mode & ATTR_BLINK);
+		}
+		for (i = 14; i <= 19; i++)
+			assert(painted[i] == 0 && backgrounds[i] == 0xfeef27);
+		assert(painted[0] == colors[defaultfg].pixel);
+		assert(painted[13] == colors[defaultfg].pixel);
+		/* The colors are configurable. */
+		searchmatchcolor = 0x112233;
+		searchmatchtextcolor = 0xddeeff;
+		searchothermatchcolor = 0x445566;
+		searchothermatchtextcolor = 0xaabbcc;
+		testrender_marks();
+		xdrawline(line, 0, 0, 20);
+		assert(painted[7] == 0xa9bacb && backgrounds[7] == 0x435465);
+		assert(painted[14] == 0xdcedfe && backgrounds[14] == 0x102132);
+		searchmatchcolor = 0xfff028;
+		searchmatchtextcolor = 0x000000;
+		searchothermatchcolor = 0x705818;
+		searchothermatchtextcolor = 0xffe4a0;
+		tsearchend(0);
+		win.mode &= ~MODE_BLINK;
 		free(xw.specbuf);
 	}
 	puts("PASS: underline styles, RGB cache reuse/eviction, fallback, balanced frees and a reused GC");
