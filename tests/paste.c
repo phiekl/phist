@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <fcntl.h>
 #include <locale.h>
 #include <sys/socket.h>
 #define VERSION "test"
@@ -949,11 +950,13 @@ testtransfers(int fd)
 	press(XK_p, 0);
 	expect(fd, "\033[200~one\rtwo\r\033[201~");
 
-	/* ttywriteraw reads the queued mode switch midway through this payload. */
+	/* A paste is queued whole with the mode it was sent in; output read
+	 * while it is written, here a mode switch, applies to the next one. */
 	memset(large, 'a', 512);
 	large[512] = 0;
 	assert(write(fd, "\033[?2004l", 8) == 8);
 	transfer(large, 512);
+	ttyread();
 	assert(!(win.mode & MODE_BRCKTPASTE));
 	snprintf(wanted, sizeof(wanted), "\033[200~%s\033[201~", large);
 	expect(fd, wanted);
@@ -962,8 +965,62 @@ testtransfers(int fd)
 	expect(fd, NULL);
 	assert(write(fd, "\033[?2004h", 8) == 8);
 	presskey('k');
+	ttyread();
 	assert(win.mode & MODE_BRCKTPASTE);
 	expect(fd, large);
+
+	/* A paste larger than the child takes at once does not block phist: the
+	 * rest is written as it reads, and keys typed meanwhile follow it. */
+	{
+		static char big[1 << 20], got[(1 << 20) + 16];
+		size_t total = 0;
+		ssize_t r;
+
+		testmouse_put("\033[?2004l");
+		memset(big, 'b', sizeof(big));
+		big[sizeof(big) - 1] = '\n';
+		alarm(10);
+		transfer(big, sizeof(big));
+		presskey('p');
+		assert(paste.state == PASTE_IDLE && ttywritepending());
+		pressnow(XK_x, 0); /* typed while the paste is written */
+		assert(fcntl(fd, F_SETFL, O_NONBLOCK) == 0);
+		while (ttywritepending() || total < sizeof(big) + 1) {
+			while ((r = read(fd, got + total, sizeof(got) - total)) > 0)
+				total += r;
+			ttyflushwrites();
+		}
+		assert(fcntl(fd, F_SETFL, 0) == 0);
+		alarm(0);
+		assert(total == sizeof(big) + 1);
+		assert(got[sizeof(big) - 2] == 'b' && got[sizeof(big) - 1] == '\r');
+		assert(got[sizeof(big)] == 'x');
+
+		/* A paste that does not fit the queue sends none of it. */
+		total = 0;
+		alarm(30);
+		do {
+			ttypaste(big, sizeof(big), 0);
+			total += sizeof(big);
+		} while (ttyinputfits(sizeof(big)));
+		transfer(big, sizeof(big));
+		presskey('p');
+		assert(paste.state == PASTE_IDLE);
+		assert(!strcmp(pastefail.text, "The program is not reading its input"));
+		pastefailclear();
+		assert(fcntl(fd, F_SETFL, O_NONBLOCK) == 0);
+		while (ttywritepending()) {
+			while ((r = read(fd, got, sizeof(got))) > 0)
+				total -= r;
+			ttyflushwrites();
+		}
+		while ((r = read(fd, got, sizeof(got))) > 0)
+			total -= r;
+		assert(fcntl(fd, F_SETFL, 0) == 0);
+		alarm(0);
+		assert(!total);
+		testmouse_put("\033[?2004h");
+	}
 
 	/* Any 8-bit reply type is text, but it must not change within a paste. */
 	selpaste(NULL);
@@ -1834,28 +1891,28 @@ testdialog(int fd)
 	 * five seconds. It takes all other keys and clicks meanwhile, except
 	 * that pasting retries, replacing it. */
 	limit = pastemaxbytes;
-	pastemaxbytes = 4 * 1024 * 1024;
+	pastemaxbytes = 32 * 1024 * 1024;
 	selpaste(NULL);
 	supply((Property){ .type = 43, .format = 32 }, 0);
 	{
 		Property p = textproperty("x", 1);
 
-		p.remaining = 5 * 1024 * 1024; /* an INCR chunk past the limit */
+		p.remaining = 33 * 1024 * 1024; /* an INCR chunk past the limit */
 		supply(p, 1);
 	}
 	assert(paste.state == PASTE_IDLE);
-	assert(!strcmp(pastefail.text, "The paste is larger than 4194304 bytes"));
+	assert(!strcmp(pastefail.text, "The paste is larger than 33554432 bytes"));
 	drain();
 	drawdialog();
 	expectframe(PASTE_RED);
 	assert(rects[0].y == 8 && rects[0].h == 4 && rects[0].pixel == pixel(PASTE_RED));
 	assert(rects[1].y == 8 && rects[1].h == 1 && rects[1].pixel == pixel(PASTE_DARKRED));
 	assert(dialogrow("Paste failed") == 8);
-	assert(dialogrow("The paste is larger than 4194304 bytes") == 10);
+	assert(dialogrow("The paste is larger than 33554432 bytes") == 10);
 	/* Both lines are centered. */
 	for (x = 0; !painted[10][x]; x++)
 		;
-	assert(x - (rects[0].x + 2) == (rects[0].x + rects[0].w - 3) - (x + 37));
+	assert(x - (rects[0].x + 2) == (rects[0].x + rects[0].w - 3) - (x + 38)); /* its last of 39 columns */
 	assert(ink[10][x] == pixel(PASTE_GOLD));
 	/* Keys within the delay, other keys and clicks do nothing. */
 	asked = requests;

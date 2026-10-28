@@ -234,10 +234,14 @@ repaint.
 
 ## 8. Limits and failures
 
-- Pastes over 4 MiB (`pastemaxbytes`) are cancelled.
+- Pastes over 32 MiB (`pastemaxbytes`) are cancelled. A paste is
+  buffered whole before anything is sent, so the limit bounds memory: a
+  selection owner could otherwise send without end.
 - A transfer making no progress for 3 s (`pastetimeout`) is cancelled.
 - So is a transfer with invalid data, e.g. a reply of a format other
   than 8 bits or changing its type midway.
+- A paste is refused when the input queue holds input and cannot take
+  it within 64 MiB, because the child has stopped reading.
 
 A cancelled paste sends nothing and is explained in a red box, styled
 like the dialog, with the title bar `Paste failed` and the reason, both
@@ -245,9 +249,10 @@ centered:
 
 | Cause                | Reason shown                                   |
 |----------------------|------------------------------------------------|
-| too large            | `The paste is larger than 4194304 bytes` (`pastemaxbytes`) |
+| too large            | `The paste is larger than 33554432 bytes` (`pastemaxbytes`) |
 | no progress          | `The selection owner stopped answering`        |
 | invalid data         | `The selection owner sent invalid data`        |
+| queue full           | `The program is not reading its input`         |
 
 The box shows for 5 s. Esc, Ctrl+C or Enter close it sooner, but not
 within 500 ms (`pasteenterdelay`) of it appearing. While it is shown, it

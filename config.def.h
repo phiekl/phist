@@ -68,8 +68,10 @@ static unsigned int doubleclicktimeout = 300;
 static unsigned int tripleclicktimeout = 600;
 
 /* Maximum paste size and selection transfer timeout without progress (ms).
- * Pastes with newlines, tabs, controls or invalid UTF-8 need confirmation. */
-static size_t pastemaxbytes = 4 * 1024 * 1024;
+ * Pastes with newlines, tabs, controls or invalid UTF-8 need confirmation.
+ * A paste is buffered whole before it is sent, so the size bounds memory:
+ * an owner could otherwise send without end. */
+static size_t pastemaxbytes = 32 * 1024 * 1024;
 static unsigned int pastetimeout = 3000;
 /* Enter and the choice keys are ignored this long after the paste dialog,
  * or its question, appears (ms), so that a key press meant for the

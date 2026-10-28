@@ -70,7 +70,7 @@ expectfcntlfailure(int cmd, int wantsets)
 		setflags = 0;
 		atexit(exitstatus);
 		wantedsets = wantsets;
-		ttyreply("x", 1);
+		ttywrite("x", 1, 0);
 		_exit(9);
 	}
 	assert(waitpid(child, &status, 0) == child);
@@ -119,10 +119,10 @@ main(void)
 	put("\033[H");
 	shortwrites = 1;
 	put("\033[6n");
-	assert(ttyreplypending());
+	assert(ttywritepending());
 	assert(read(fds[1], reply, sizeof(reply)) == 1 && reply[0] == '\033');
 	ttyinput("x", 1, 1);
-	assert(!ttyreplypending());
+	assert(!ttywritepending());
 	assert(read(fds[1], reply, sizeof(reply)) == 6 && !memcmp(reply, "[1;1Rx", 6));
 	/*
 	 * Replies to queries read while an earlier reply is being completed
@@ -143,7 +143,9 @@ main(void)
 		size_t got = 0;
 		ssize_t r;
 
-		ttyflushreplies();
+		/* phist reads the queries once the keypress is written. */
+		ttyread();
+		ttyflushwrites();
 		assert(fcntl(fds[1], F_SETFL, O_NONBLOCK) == 0);
 		while ((r = read(fds[1], all + got, sizeof(all) - got)) > 0)
 			got += r;
@@ -153,13 +155,11 @@ main(void)
 			assert(!memcmp(all + 6 + 6 * i, "\033[1;1R", 6));
 	}
 
-	/* Replies produced while user input is being written wait for it. */
-	replies.userwrite = 1;
+	/* Replies produced while user input waits to be written follow it. */
+	ttyqueue("y", 1);
 	put("\033[6n");
-	assert(ttyreplypending());
-	replies.userwrite = 0;
-	ttyflushreplies();
-	assert(read(fds[1], reply, sizeof(reply)) == 6 && !memcmp(reply, "\033[1;1R", 6));
+	assert(!ttywritepending());
+	assert(read(fds[1], reply, sizeof(reply)) == 7 && !memcmp(reply, "y\033[1;1R", 7));
 	puts("PASS: replies and user input reach the child in order, also after a short write, without blocking");
 
 	/*
@@ -180,7 +180,7 @@ main(void)
 		put("\033[H");
 		for (i = 0; i < 30000; i++)
 			put("\033[6n");
-		assert(ttyreplypending());
+		assert(ttywritepending());
 		put("ok");
 		assert(term.line[0][0].u == 'o' && term.line[0][1].u == 'k');
 		do {
@@ -188,14 +188,67 @@ main(void)
 				assert(!memcmp(drain, "\033[1;1R", 6));
 				total += n;
 			}
-			ttyflushreplies();
-		} while (ttyreplypending());
+			ttyflushwrites();
+		} while (ttywritepending());
 		alarm(0);
 		/* The pipe's capacity plus at most REPLY_MAX, in whole replies. */
 		assert(total % 6 == 0 && total > REPLY_MAX && total < 30000 * 6);
 		close(p[0]);
 		close(p[1]);
 		puts("PASS: a query flood without reading neither blocks nor re-enters the parser");
+	}
+
+	/* The input queue stops growing, keeping the input it took in order. */
+	{
+		static char chunk[1 << 20], drain[1 << 16];
+		size_t total = 0, pending, huge = (size_t)INPUT_MAX * 2;
+		ssize_t n;
+		int s[2];
+
+		assert(socketpair(AF_UNIX, SOCK_STREAM, 0, s) == 0);
+		cmdfd = s[0];
+		reset(20, 4);
+		alarm(30);
+		assert(ttyinputfits(huge)); /* an empty queue takes any input */
+		memset(chunk, 'c', sizeof(chunk));
+		do {
+			ttyinput(chunk, sizeof(chunk), 0);
+			total += sizeof(chunk);
+		} while (input.len <= INPUT_MAX - sizeof(chunk));
+		ttyinput(chunk, INPUT_MAX - input.len, 0);
+		pending = input.len;
+		assert(!ttyinputfits(1));
+		ttyinput("k", 1, 0);
+		assert(input.len == pending);
+		ttyinput("", 0, 0); /* nothing to drop */
+
+		assert(fcntl(s[1], F_SETFL, O_NONBLOCK) == 0);
+		total = 0;
+		do {
+			while ((n = read(s[1], drain, sizeof(drain))) > 0) {
+				assert(!memchr(drain, 'k', n));
+				total += n;
+			}
+			ttyflushwrites();
+		} while (ttywritepending());
+		while ((n = read(s[1], drain, sizeof(drain))) > 0)
+			total += n;
+		alarm(0);
+		assert(total >= pending);
+		assert(ttyinputfits(huge));
+		ttyinput("k", 1, 0);
+		assert(read(s[1], drain, 1) == 1 && drain[0] == 'k');
+
+		/* CR/LF translation may double what is queued. */
+		ttyinput(chunk, sizeof(chunk), 0);
+		assert(input.len);
+		tsetmode(0, 1, (int[]){ 20 }, 1);
+		assert(IS_SET(MODE_CRLF));
+		assert(ttyinputfits((INPUT_MAX - input.len) / 2));
+		assert(!ttyinputfits((INPUT_MAX - input.len) / 2 + 1));
+		close(s[0]);
+		close(s[1]);
+		puts("PASS: a full input queue refuses input and delivers what it took");
 	}
 
 	expectfcntlfailure(F_GETFL, 0);

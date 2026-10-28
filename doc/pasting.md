@@ -57,8 +57,10 @@ source bytes before the terminal's delivery rules are applied.
 
 ## Limits and failures
 
-`pastemaxbytes` limits the buffered paste to 4 MiB. `pastetimeout` cancels a
-transfer after three seconds without progress. `pasteenterdelay` sets the
+`pastemaxbytes` limits the buffered paste to 32 MiB. `pastetimeout` cancels
+a transfer after three seconds without progress. A paste is also refused,
+sending nothing, while the program has not read enough earlier input for it
+to fit within a 64 MiB queue. `pasteenterdelay` sets the
 500 ms accidental-choice guard. Add these definitions from `config.def.h`
 when retaining an older `config.h`.
 

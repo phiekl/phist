@@ -498,13 +498,21 @@ pastesend(int mode)
 			continue;
 		text[j++] = text[i] == '\n' ? '\r' : text[i];
 	}
-	/* tty writes can read output: keep the same mode for both markers. */
+	/* All of it or none: a shell must not run the start of a paste. */
+	if (!ttyinputfits(j + (bracketed ? 12 : 0))) {
+		free(text);
+		pasteclear();
+		pastefailed("The program is not reading its input");
+		return;
+	}
+	blinkreset();
+	/* The mode is decided once, before any of it is queued, for both markers. */
 	if (bracketed)
-		sendinput("\033[200~", 6, 0);
+		ttypaste("\033[200~", 6, 0);
 	if (j)
-		sendinput(text, j, 1);
+		ttypaste(text, j, 1);
 	if (bracketed)
-		sendinput("\033[201~", 6, 0);
+		ttypaste("\033[201~", 6, 0);
 	free(text);
 	pasteclear();
 }

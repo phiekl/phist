@@ -111,11 +111,13 @@ void ttyhangup(void);
 int ttynew(const char *, char *, const char *, char **, const char *);
 size_t ttyread(void);
 void ttyreply(const char *, size_t);
-int ttyreplypending(void);
-void ttyflushreplies(void);
+int ttywritepending(void);
+void ttyflushwrites(void);
 void ttyresize(int, int);
 void ttywrite(const char *, size_t, int);
+int ttyinputfits(size_t);
 void ttyinput(const char *, size_t, int);
+void ttypaste(const char *, size_t, int);
 
 void resettitle(void);
 

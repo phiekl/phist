@@ -58,9 +58,9 @@ sh tests/paste.sh` for paste-path regressions.
 
 ## Short writes
 
-A short write does not imply that child output is ready to read.
-`ttywriteraw()` retries after the tty becomes writable; output is read only
-when `select()` reports readability. Reading immediately after a short write
+A short write does not imply that child output is ready to read. Queued
+output is retried after the tty becomes writable; output is read only when
+`select()` reports readability. Reading immediately after a short write
 could block forever with a silent child, and a second read using the same
 readiness result could block too.
 
@@ -90,10 +90,46 @@ into a full buffer.
 Replies already pending when user input begins go first, including the rest
 of a partially written reply. Replies generated while that input is being
 written go afterwards. A key cannot split a reply, a reply cannot split a
-paste, and continuous queries cannot indefinitely hold input back.
-User-input writes are still synchronous at this stage.
+paste, and continuous queries cannot indefinitely hold input back. User
+input is also queued; see [queued user input](#queued-user-input).
 
 The reply suite forces partial writes to check ordering. A bounded manual
 stress case is `yes "$(printf '\033[6n')" | head -n 300000; echo survived`.
 It should reach `survived` without closing phist. Replies that fit in the tty
 and queue then reach the shell as input; Ctrl+C discards them.
+
+## Queued user input
+
+Keys and pastes enter a queue and are written without blocking as the child
+reads them. The event loop watches tty writability whenever either input or
+replies are pending, keeping drawing, keyboard handling and window-manager
+interaction responsive even when a child reads slowly or not at all. Keys
+typed while a paste is pending follow the paste.
+
+Already queued replies precede new input; replies generated later follow it.
+`ttywritepending()` and `ttyflushwrites()` manage both kinds of output,
+replacing the reply-only helpers. Partial writes advance a read offset
+rather than move the remainder on every write. The memory of a large paste
+is released once it has been written. Writes never read output recursively,
+so output cannot change bracketed-paste mode mid-write.
+
+The previous synchronous paste path could keep phist unresponsive until a child
+consumed the whole paste. With that delay removed, `pastemaxbytes` increases
+from 4 MiB to 32 MiB. A limit still bounds memory: the transfer is buffered
+whole, briefly with several copies, and an INCR owner could otherwise send
+chunks without end. That limit applies to each incoming selection.
+
+The queue as a whole stops growing at 64 MiB, so a child that stopped reading
+cannot have phist buffer paste after paste. A paste that does not fit is
+refused whole and explained in the paste failure box, since sending part of it
+could run a command cut short. A key that does not fit is dropped and reported
+on stderr at the rate of other terminal errors. An empty queue accepts one
+input of any size, so a single large paste, which transformation or CR/LF
+translation may make larger than the limit, is never refused for its size here.
+
+Run `LC_ALL=C.UTF-8 sh tests/paste.sh` and `LC_ALL=C.UTF-8 sh
+tests/replies.sh`. Paste checks queue 1 MiB to a non-reading child, require
+an immediate return, then verify a later key follows the paste and that a
+paste not fitting the queue sends nothing. Reply checks verify ordering with
+queued input and the keys dropped from a full queue. Both suites also support
+UndefinedBehaviorSanitizer through `CFLAGS`.

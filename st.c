@@ -48,6 +48,7 @@
 #define ERRESC_BURST  20        /* diagnostics printed before rate limiting */
 #define ERRESC_RATE   5         /* diagnostics per second after a burst */
 #define REPLY_MAX     4096      /* bytes of query replies waiting for the child */
+#define INPUT_MAX     (64 * 1024 * 1024) /* queued-input limit; an empty queue accepts one larger input */
 #define DUMP_MAX      128       /* bytes of a sequence shown in a diagnostic */
 #define TITLE_MARKS   4         /* combining marks kept per character in titles */
 #define STR_ARG_SIZ   ESC_ARG_SIZ
@@ -183,7 +184,6 @@ typedef struct {
 static void execsh(char *, char **);
 static void stty(char **);
 static void sigchld(int);
-static void ttywriteraw(const char *, size_t);
 
 static int erresc(const char *, ...);
 static void csidump(void);
@@ -1990,11 +1990,63 @@ ttyread(void)
 static struct {
 	char buf[REPLY_MAX];
 	size_t len;
-	int userwrite; /* user input is being written; replies wait for it */
 } replies;
 
+/* Queue keys and pastes for the event loop so a non-reading child cannot
+ * block drawing or output processing. Preserve order with earlier input. */
+static struct {
+	char *buf;
+	size_t off, len, cap; /* len bytes from off wait to be written */
+} input;
+
+static void
+ttyqueue(const char *s, size_t n)
+{
+	if (!n)
+		return;
+	if (n > input.cap - input.off - input.len) {
+		if (input.off) {
+			memmove(input.buf, input.buf + input.off, input.len);
+			input.off = 0;
+		}
+		if (n > input.cap - input.len) {
+			input.cap = MAX(input.len + n, MAX(BUFSIZ, input.cap * 2));
+			input.buf = xrealloc(input.buf, input.cap);
+		}
+	}
+	memcpy(input.buf + input.off + input.len, s, n);
+	input.len += n;
+}
+
+/*
+ * Whether n more bytes of user input may be queued. An empty queue takes any
+ * amount, leaving the size of a single paste to its own limit. Otherwise a
+ * child that stopped reading would have phist buffer pastes without end.
+ */
+int
+ttyinputfits(size_t n)
+{
+	ttyflushwrites();
+	if (IS_SET(MODE_CRLF))
+		n *= 2; /* each CR may be followed by LF */
+	return !n || !input.len || (input.len <= INPUT_MAX && n <= INPUT_MAX - input.len);
+}
+
+/* Keys are single actions, so one that does not fit is lost on its own. */
 void
 ttyinput(const char *s, size_t n, int may_echo)
+{
+	if (!ttyinputfits(n)) {
+		erresc("erresc: input dropped, child is not reading "
+		       "(%zu bytes pending)\n", input.len);
+		return;
+	}
+	ttypaste(s, n, may_echo);
+}
+
+/* Queue input already found to fit, which may be one paste in several parts. */
+void
+ttypaste(const char *s, size_t n, int may_echo)
 {
 	uint64_t oldstart = sb_view_start();
 
@@ -2011,43 +2063,32 @@ void
 ttywrite(const char *s, size_t n, int may_echo)
 {
 	const char *next;
-	size_t len;
 
 	if (may_echo && IS_SET(MODE_ECHO))
 		twrite(s, n, 1);
 
-	/*
-	 * Keep user input (keys, pastes) in order with query replies: the
-	 * replies queued now, perhaps partly written, go out first, and
-	 * replies to output read meanwhile wait until the input is written,
-	 * so neither can split the other. Only those queued on entry are sent
-	 * first, so a child sending queries all the time cannot hold back the
-	 * input.
-	 */
-	replies.userwrite++;
-	if ((len = replies.len) > 0) {
-		/* ttyread() may append replies after len; they stay queued. */
-		ttywriteraw(replies.buf, len);
-		replies.len -= len;
-		memmove(replies.buf, replies.buf + len, replies.len);
+	/* Pending replies precede this input; replies generated later follow it.
+	 * Neither can split the other, and query floods cannot hold input back. */
+	if (replies.len) {
+		ttyqueue(replies.buf, replies.len);
+		replies.len = 0;
 	}
 	if (!IS_SET(MODE_CRLF)) {
-		ttywriteraw(s, n);
+		ttyqueue(s, n);
 	} else while (n > 0) {
 		/* This is similar to how the kernel handles ONLCR for ttys */
 		if (*s == '\r') {
 			next = s + 1;
-			ttywriteraw("\r\n", 2);
+			ttyqueue("\r\n", 2);
 		} else {
 			next = memchr(s, '\r', n);
 			DEFAULT(next, s + n);
-			ttywriteraw(s, next - s);
+			ttyqueue(s, next - s);
 		}
 		n -= next - s;
 		s = next;
 	}
-	replies.userwrite--;
-	ttyflushreplies();
+	ttyflushwrites();
 }
 
 void
@@ -2060,90 +2101,62 @@ ttyreply(const char *s, size_t n)
 	}
 	memcpy(replies.buf + replies.len, s, n);
 	replies.len += n;
-	ttyflushreplies();
+	ttyflushwrites();
 }
 
 int
-ttyreplypending(void)
+ttywritepending(void)
 {
-	return replies.len > 0;
+	return input.len > 0 || replies.len > 0;
 }
 
-void
-ttyflushreplies(void)
+/* Write what the child takes now of n bytes, without blocking. Return
+ * how many it took. */
+static size_t
+ttywritesome(const char *s, size_t n)
 {
 	ssize_t r;
 	int flags, saved;
 
-	if (!replies.len || replies.userwrite)
-		return;
 	/* Require nonblocking mode before writing, and preserve the original flags. */
 	if ((flags = fcntl(cmdfd, F_GETFL)) < 0 ||
 	    fcntl(cmdfd, F_SETFL, flags | O_NONBLOCK) < 0)
 		die("couldn't make tty nonblocking: %s\n", strerror(errno));
-	r = write(cmdfd, replies.buf, replies.len);
+	r = write(cmdfd, s, n);
 	saved = errno;
 	if (fcntl(cmdfd, F_SETFL, flags) < 0)
 		die("couldn't restore tty flags: %s\n", strerror(errno));
 	if (r < 0) {
 		if (saved == EAGAIN || saved == EWOULDBLOCK || saved == EINTR)
-			return;
+			return 0;
 		die("write error on tty: %s\n", strerror(saved));
 	}
-	replies.len -= r;
-	memmove(replies.buf, replies.buf + r, replies.len);
+	return r;
 }
 
+/* Write queued input, then replies once all input is written. */
 void
-ttywriteraw(const char *s, size_t n)
+ttyflushwrites(void)
 {
-	fd_set wfd, rfd;
-	ssize_t r;
-	size_t lim = 256;
+	size_t r;
 
-	/*
-	 * Remember that we are using a pty, which might be a modem line.
-	 * Writing too much will clog the line. That's why we are doing this
-	 * dance.
-	 * FIXME: Migrate the world to Plan 9.
-	 */
-	while (n > 0) {
-		FD_ZERO(&wfd);
-		FD_ZERO(&rfd);
-		FD_SET(cmdfd, &wfd);
-		FD_SET(cmdfd, &rfd);
-
-		/* Check if we can write. */
-		if (pselect(cmdfd+1, &rfd, &wfd, NULL, NULL, NULL) < 0) {
-			if (errno == EINTR)
-				continue;
-			die("select failed: %s\n", strerror(errno));
-		}
-		if (FD_ISSET(cmdfd, &wfd)) {
-			/*
-			 * Only write the bytes written by ttywrite() or the
-			 * default of 256. This seems to be a reasonable value
-			 * for a serial line. Bigger values might clog the I/O.
-			 */
-			if ((r = write(cmdfd, s, (n < lim)? n : lim)) < 0)
-				goto write_error;
-			if (r < n) {
-				/* A short write says nothing about output readiness. Read below
-				 * only if select() reported it, and consume that readiness once. */
-				n -= r;
-				s += r;
-			} else {
-				/* All bytes have been written. */
-				break;
-			}
-		}
-		if (FD_ISSET(cmdfd, &rfd))
-			lim = ttyread();
+	while (input.len && (r = ttywritesome(input.buf + input.off, input.len))) {
+		input.off += r;
+		input.len -= r;
 	}
-	return;
-
-write_error:
-	die("write error on tty: %s\n", strerror(errno));
+	if (!input.len) {
+		input.off = 0;
+		if (input.cap > 1 << 20) {
+			/* Give back the memory of a large paste. */
+			free(input.buf);
+			input.buf = NULL;
+			input.cap = 0;
+		}
+	}
+	if (!input.len && replies.len && (r = ttywritesome(replies.buf, replies.len))) {
+		replies.len -= r;
+		memmove(replies.buf, replies.buf + r, replies.len);
+	}
 }
 
 void

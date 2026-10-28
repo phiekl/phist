@@ -8,8 +8,8 @@ phist is an X11 terminal emulator forked from [st](https://st.suckless.org/).
   defaults](doc/building.md#default-settings), with local build configuration.
 - [Compressed, reflowing scrollback](doc/scrollback.md) with page keys and
   history preserved across clears and resets.
-- [Consistent Delete keys and nonblocking queued replies](doc/input.md), with
-  tty readiness and input ordering preserved.
+- [Consistent Delete keys and nonblocking input/reply queues](doc/input.md),
+  preserving order and terminal responsiveness.
 - [Configurable blinking cursor
   styles](doc/appearance.md#cursor-and-blinking).
 - [Colored single, double, curly, dotted and dashed

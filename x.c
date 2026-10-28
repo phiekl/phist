@@ -3029,8 +3029,8 @@ run(void)
 		FD_ZERO(&wfd);
 		FD_SET(ttyfd, &rfd);
 		FD_SET(xfd, &rfd);
-		/* Deliver queued query replies as soon as the child reads. */
-		if (ttyreplypending())
+		/* Deliver queued input and query replies as the child reads. */
+		if (ttywritepending())
 			FD_SET(ttyfd, &wfd);
 
 		if (XPending(xw.dpy))
@@ -3049,7 +3049,7 @@ run(void)
 		pasteremaining(now);
 
 		if (FD_ISSET(ttyfd, &wfd))
-			ttyflushreplies();
+			ttyflushwrites();
 		if (FD_ISSET(ttyfd, &rfd))
 			ttyread();
 
