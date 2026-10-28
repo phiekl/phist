@@ -59,6 +59,20 @@ main(void)
 	assert(setlocale(LC_CTYPE, "C.UTF-8"));
 	reset(10, 4);
 
+	/* OSC 7 is metadata shared by both screens, kept across clears and
+	 * resize, and removed by RIS. Embedded NUL must not truncate a URI. */
+	put("\033]7;file://host/project\a\033[?1049h\033[?1049l\033[2J");
+	tresize(12, 5);
+	assert(!strcmp(lastcwd, "file://host/project"));
+	{
+		static const char sequence[] = "\033]7;file://host/wrong\0suffix\a";
+		twrite(sequence, sizeof(sequence) - 1, 0);
+		assert(!strcmp(lastcwd, "file://host/project"));
+	}
+	put("\033c");
+	assert(!lastcwd[0]);
+	reset(10, 4);
+
 	/* Vim's CSI intermediate-byte probe is a silent no-op, not SGR 0. */
 	put("\033[1;31mX");
 	assert(!*puterr("\033[0%m"));

@@ -187,6 +187,18 @@ Copy the selected text to the clipboard selection.
 .TP
 .B Ctrl-Shift-v
 Paste from the clipboard selection.
+.SH WORKING DIRECTORY REPORTS
+OSC 7 reports publish a file URI as the
+.B _PHIST_CWD_URI
+X11 window property of type UTF8_STRING. Read it with
+.B xprop \-id \(dq$WINDOWID\(dq _PHIST_CWD_URI
+or watch changes with
+.B xprop \-spy \-id \(dq$WINDOWID\(dq _PHIST_CWD_URI\&.
+The hostname and percent encoding are preserved. Reports are limited to
+16,384 bytes; malformed reports are ignored. The property is absent until
+a valid report and is removed by an empty report or terminal reset.
+phist never changes directory in response to OSC 7. Consumers must check
+the host before using the decoded path as a local directory.
 .SH CUSTOMIZATION
 .B phist
 can be customized by creating a custom config.h and (re)compiling the source

@@ -36,6 +36,8 @@ int xgetcolor(int a, unsigned char *b, unsigned char *c, unsigned char *d) { ret
 static char lasttitle[1024], lasticontitle[1024];
 void xseticontitle(char *s) { snprintf(lasticontitle, sizeof(lasticontitle), "%s", s ? s : ""); }
 void xsettitle(char *s) { snprintf(lasttitle, sizeof(lasttitle), "%s", s ? s : ""); }
+static char lastcwd[16385];
+void xsetcwd(const char *s) { snprintf(lastcwd, sizeof(lastcwd), "%s", s ? s : ""); }
 int xsetcursor(int a) { return 0; }
 void xsetmode(int a, unsigned int b) {}
 void xsetsel(char *s) {}

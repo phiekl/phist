@@ -115,6 +115,7 @@ typedef struct {
 	Drawable buf;
 	GlyphFontSpec *specbuf; /* font spec buffer used for rendering */
 	Atom xembed, wmdeletewin, netwmname, netwmiconname, netwmpid;
+	Atom cwduri, utf8string;
 	struct {
 		XIM xim;
 		XIC xic;
@@ -1928,6 +1929,8 @@ xinit(int cols, int rows)
 	xw.wmdeletewin = XInternAtom(xw.dpy, "WM_DELETE_WINDOW", False);
 	xw.netwmname = XInternAtom(xw.dpy, "_NET_WM_NAME", False);
 	xw.netwmiconname = XInternAtom(xw.dpy, "_NET_WM_ICON_NAME", False);
+	xw.cwduri = XInternAtom(xw.dpy, "_PHIST_CWD_URI", False);
+	xw.utf8string = XInternAtom(xw.dpy, "UTF8_STRING", False);
 	XSetWMProtocols(xw.dpy, xw.win, &xw.wmdeletewin, 1);
 
 	xw.netwmpid = XInternAtom(xw.dpy, "_NET_WM_PID", False);
@@ -2905,6 +2908,36 @@ xflushtitles(void)
 	}
 }
 
+/* Directory metadata follows the same batching as titles, including while
+ * hidden. Keep the last value to avoid notifying watchers of duplicates. */
+static char *cwduri;
+static int cwddirty;
+
+void
+xsetcwd(const char *uri)
+{
+	if (!uri || !*uri)
+		uri = NULL;
+	if ((!uri && !cwduri) || (uri && cwduri && !strcmp(uri, cwduri)))
+		return;
+	free(cwduri);
+	cwduri = uri ? xstrdup(uri) : NULL;
+	cwddirty = 1;
+}
+
+static void
+xflushcwd(void)
+{
+	if (!cwddirty)
+		return;
+	if (cwduri)
+		XChangeProperty(xw.dpy, xw.win, xw.cwduri, xw.utf8string, 8,
+		                PropModeReplace, (uchar *)cwduri, strlen(cwduri));
+	else
+		XDeleteProperty(xw.dpy, xw.win, xw.cwduri);
+	cwddirty = 0;
+}
+
 
 static int vbellset = 0; /* 1 during visual bell, 0 otherwise */
 static struct timespec lastvbell = {0}, lastvbellframe = {0};
@@ -3616,6 +3649,7 @@ run(void)
 
 		/* Even when hidden, so task bars never show a stale title. */
 		xflushtitles();
+		xflushcwd();
 		draw();
 		if (vbellset) {
 			clock_gettime(CLOCK_MONOTONIC, &now);

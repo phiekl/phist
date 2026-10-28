@@ -13,5 +13,6 @@ change. Settings live in `config.def.h` and take effect through `config.h`.
 - [Testing and fuzzing](testing.md): Run regression suites and stress the terminal core with reproducible input.
 - [Terminal behavior and limits](terminal-behavior.md): How phist handles control sequences and bounds work triggered by application output.
 - [Window titles](window-titles.md): Keep application titles suitable for task bars and window lists.
+- [Working-directory reports](working-directory.md): Read shell-reported directory URIs through X11 properties.
 - [Pasting text](pasting.md): Review multiline text, tabs and control characters before sending them to a program.
 - [Paste confirmation spec](paste-spec.md): Exact transformations, dialog behavior and transfer rules.

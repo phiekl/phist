@@ -1,4 +1,5 @@
 /* See LICENSE for license details. */
+#include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -45,6 +46,7 @@
 #define STR_BUF_SIZ   ESC_BUF_SIZ
 #define STR_MAX_SIZ   (1 << 20) /* longer DCS/OSC/PM/APC strings are discarded */
 #define TITLE_MAX     512       /* bytes of a window title set by applications */
+#define CWDURI_MAX    16384     /* bytes of an OSC 7 directory URI */
 #define ERRESC_BURST  20        /* diagnostics printed before rate limiting */
 #define ERRESC_RATE   5         /* diagnostics per second after a burst */
 #define REPLY_MAX     4096      /* bytes of query replies waiting for the child */
@@ -192,6 +194,7 @@ static int readcolonargs(char **, int, int[][CAR_PER_ARG]);
 static void csiparse(void);
 static void csireset(void);
 static void osc_color_response(int, int, int);
+static void osc_cwd(const char *, size_t);
 static int eschandle(Rune);
 static void strdump(void);
 static void strhandle(void);
@@ -2657,6 +2660,7 @@ tresetstate(void)
 {
 	uint i;
 
+	xsetcwd(NULL);
 	term.c = (TCursor){{
 		.mode = ATTR_NULL,
 		.fg = defaultfg,
@@ -3723,6 +3727,57 @@ osc_color_response(int num, int index, int is_osc4)
 	}
 }
 
+/* Keep OSC 7 as metadata: never resolve its host or access its path. */
+static void
+osc_cwd(const char *uri, size_t len)
+{
+	static const char namechars[] =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+		"-._~!$&'()*+,;=";
+	const char *path, *p;
+	char host[INET6_ADDRSTRLEN];
+	struct in6_addr address;
+	size_t hostlen;
+	int byte;
+
+	if (!len) {
+		xsetcwd(NULL);
+		return;
+	}
+	if (len > CWDURI_MAX || len < 8 || strncasecmp(uri, "file://", 7))
+		return;
+	if (!(path = memchr(uri + 7, '/', len - 7)))
+		return; /* The path must be absolute, even with an empty host. */
+	if (uri[7] == '[') {
+		hostlen = path - (uri + 7);
+		if (hostlen < 3 || hostlen - 2 >= sizeof(host) || path[-1] != ']')
+			return;
+		memcpy(host, uri + 8, hostlen - 2);
+		host[hostlen - 2] = '\0';
+		if (inet_pton(AF_INET6, host, &address) != 1)
+			return;
+	}
+	for (p = uri + 7; p < uri + len; p++) {
+		if (*p == '%') {
+			if (uri + len - p < 3 || !isxdigit((uchar)p[1]) ||
+			    !isxdigit((uchar)p[2]))
+				return;
+			byte = (isdigit((uchar)p[1]) ? p[1] - '0' :
+			        tolower((uchar)p[1]) - 'a' + 10) * 16 +
+			       (isdigit((uchar)p[2]) ? p[2] - '0' :
+			        tolower((uchar)p[2]) - 'a' + 10);
+			if (byte < 0x20 || byte == 0x7f)
+				return;
+			p += 2;
+		} else if (!*p || (!strchr(namechars, *p) &&
+		           !(p >= path && strchr("/:@", *p)) &&
+		           !(p < path && uri[7] == '[' && strchr("[]:", *p)))) {
+			return;
+		}
+	}
+	xsetcwd(uri);
+}
+
 void
 strhandle(void)
 {
@@ -3740,12 +3795,22 @@ strhandle(void)
 		       strescseq.type, STR_MAX_SIZ);
 		return;
 	}
+	/* Semicolons belong to file paths too; consume OSC 7 before strparse()
+	 * splits the other protocols' arguments in place. */
+	if (strescseq.type == ']' && strescseq.len >= 2 &&
+	    strescseq.buf[0] == '7' && strescseq.buf[1] == ';') {
+		strescseq.buf[strescseq.len] = '\0';
+		osc_cwd(strescseq.buf + 2, strescseq.len - 2);
+		return;
+	}
 	strparse();
 	par = (narg = strescseq.narg) ? atoi(strescseq.args[0]) : 0;
 
 	switch (strescseq.type) {
 	case ']': /* OSC -- Operating System Command */
 		switch (par) {
+		case 7: /* malformed directory report without the OSC 7 separator */
+			return;
 		case 0:
 			if (narg > 1) {
 				xsettitle(strtitle(strescseq.args[1]));

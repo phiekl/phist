@@ -166,7 +166,7 @@ gen_csi(char *out, size_t *len)
 static void
 gen_osc(char *out, size_t *len)
 {
-	static const int codes[] = {0, 1, 2, 4, 10, 11, 12, 52, 104, 110, 111, 112};
+	static const int codes[] = {0, 1, 2, 4, 7, 10, 11, 12, 52, 104, 110, 111, 112};
 	static const char b64[] = "ABCabc012+/\n\r\t\x01\xff=";
 	char *p = out;
 	int code = codes[rndmod(LEN(codes))], i;
@@ -198,6 +198,9 @@ gen_osc(char *out, size_t *len)
 		else
 			p += sprintf(p, "#%06x", (int)rndmod(0x1000000));
 		break;
+	case 7:
+		p += sprintf(p, "file://host/");
+		/* FALLTHROUGH */
 	default:
 		for (i = 0; i < 20; i++)
 			*p++ = 0x20 + rndmod(0x60);
