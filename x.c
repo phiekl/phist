@@ -1,4 +1,5 @@
 /* See LICENSE for license details. */
+#include <ctype.h>
 #include <errno.h>
 #include <math.h>
 #include <limits.h>
@@ -7,6 +8,8 @@
 #include <sys/select.h>
 #include <time.h>
 #include <unistd.h>
+#include <wchar.h>
+#include <wctype.h>
 #include <libgen.h>
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
@@ -63,6 +66,11 @@ static void clipcopy(const Arg *);
 static void clippaste(const Arg *);
 static void numlock(const Arg *);
 static void selpaste(const Arg *);
+static void pastestart(Atom);
+static void pasteclear(void);
+static double pasteremaining(struct timespec);
+static int pastekey(KeySym, uint);
+static void pastedraw(void);
 static void zoom(const Arg *);
 static void zoomabs(const Arg *);
 static void zoomreset(const Arg *);
@@ -279,6 +287,8 @@ xunderlinepixel(uint32_t rgb, unsigned long fallback)
 }
 static XSelection xsel;
 static TermWindow win;
+static uint mouseignored; /* buttons pressed under the paste dialog */
+static uint mousepasting; /* paste bindings pressed under its failure box */
 
 /* Font Ring Cache */
 enum {
@@ -424,18 +434,22 @@ clipcopy(const Arg *dummy)
 void
 clippaste(const Arg *dummy)
 {
-	Atom clipboard;
-
-	clipboard = XInternAtom(xw.dpy, "CLIPBOARD", 0);
-	XConvertSelection(xw.dpy, clipboard, xsel.xtarget, clipboard,
-			xw.win, CurrentTime);
+	pastestart(XInternAtom(xw.dpy, "CLIPBOARD", 0));
 }
 
 void
 selpaste(const Arg *dummy)
 {
-	XConvertSelection(xw.dpy, XA_PRIMARY, xsel.xtarget, XA_PRIMARY,
-			xw.win, CurrentTime);
+	pastestart(XA_PRIMARY);
+}
+
+/* What to draw with while a full colormap has no room for a color, keeping
+ * light on dark and dark on light. Allocating is tried again the next time. */
+static Color *
+xnearestcolor(const XRenderColor *value)
+{
+	return &dc.col[0.2126 * value->red + 0.7152 * value->green +
+	               0.0722 * value->blue >= 0x8000 ? 15 : 0];
 }
 
 /* Cache a successful allocation; use the fallback and retry after failure. */
@@ -446,6 +460,8 @@ xlazycolor(Color *color, int *loaded, const XRenderColor *value, Color *fallback
 		*loaded = XftColorAllocValue(xw.dpy, xw.vis, xw.cmap, value, color);
 	return *loaded ? color : fallback;
 }
+
+#include "paste.c"
 
 void
 numlock(const Arg *dummy)
@@ -583,13 +599,17 @@ bpress(XEvent *e)
 	struct timespec now;
 	int snap;
 
-	if (btn != Button1)
-		xsel.clicks = 0;
-
-	/* The wheel scrolls history, also beneath alternate-screen programs. */
+	/* The wheel scrolls history, also beneath alternate-screen programs
+	 * and the paste boxes, but the text in the paste's full view. */
 	if (btn == Button4 || btn == Button5) {
 		Arg a;
 		a.i = MAX(1, mousescrolllines);
+		xsel.clicks = 0;
+		/* Not even its release reaches a binding beneath them. */
+		if (pastemodal())
+			mouseignored |= buttonmask(btn);
+		if (pastewheel(btn == Button4 ? -a.i : a.i))
+			return;
 		if (btn == Button4) {
 			kscrollup(&a);
 		} else {
@@ -597,6 +617,23 @@ bpress(XEvent *e)
 		}
 		return;
 	}
+
+	/* The paste dialog and failure box are modal: clicks do nothing
+	 * beneath them, not even on release, which could republish an old
+	 * selection. A drag begun before them still ends. Under the failure
+	 * box, a paste binding retries, and does nothing else. */
+	if (pastemodal()) {
+		if (paste.state != PASTE_CONFIRM && pastemousebinding(e)) {
+			mousepasting |= buttonmask(btn);
+			pastemouseaction(e, 0);
+		} else {
+			mouseignored |= buttonmask(btn);
+		}
+		return;
+	}
+
+	if (btn != Button1)
+		xsel.clicks = 0;
 
 	if (btn == Button1 && match(XK_NO_MOD, e->xbutton.state & ~LockMask) &&
 	    (urlclick.text = tgeturl(evcol(e), evrow(e)))) {
@@ -620,118 +657,6 @@ bpress(XEvent *e)
 			selstart(evcol(e), evrow(e), 0);
 		}
 	}
-}
-
-void
-propnotify(XEvent *e)
-{
-	XPropertyEvent *xpev;
-	Atom clipboard = XInternAtom(xw.dpy, "CLIPBOARD", 0);
-
-	xpev = &e->xproperty;
-	if (xpev->state == PropertyNewValue &&
-			(xpev->atom == XA_PRIMARY ||
-			 xpev->atom == clipboard)) {
-		selnotify(e);
-	}
-}
-
-void
-selnotify(XEvent *e)
-{
-	ulong nitems, ofs, rem;
-	int format;
-	uchar *data, *last, *repl, *src;
-	Atom type, incratom, property = None;
-
-	incratom = XInternAtom(xw.dpy, "INCR", 0);
-
-	ofs = 0;
-	if (e->type == SelectionNotify)
-		property = e->xselection.property;
-	else if (e->type == PropertyNotify)
-		property = e->xproperty.atom;
-
-	if (property == None)
-		return;
-
-	do {
-		if (XGetWindowProperty(xw.dpy, xw.win, property, ofs,
-					BUFSIZ/4, False, AnyPropertyType,
-					&type, &format, &nitems, &rem,
-					&data)) {
-			fprintf(stderr, "Clipboard allocation failed\n");
-			return;
-		}
-
-		if (e->type == PropertyNotify && nitems == 0 && rem == 0) {
-			/*
-			 * If there is some PropertyNotify with no data, then
-			 * this is the signal of the selection owner that all
-			 * data has been transferred. We won't need to receive
-			 * PropertyNotify events anymore.
-			 */
-			MODBIT(xw.attrs.event_mask, 0, PropertyChangeMask);
-			XChangeWindowAttributes(xw.dpy, xw.win, CWEventMask,
-					&xw.attrs);
-		}
-
-		if (type == incratom) {
-			/*
-			 * Activate the PropertyNotify events so we receive
-			 * when the selection owner does send us the next
-			 * chunk of data.
-			 */
-			MODBIT(xw.attrs.event_mask, 1, PropertyChangeMask);
-			XChangeWindowAttributes(xw.dpy, xw.win, CWEventMask,
-					&xw.attrs);
-
-			/*
-			 * Deleting the property is the transfer start signal.
-			 */
-			XDeleteProperty(xw.dpy, xw.win, (int)property);
-			continue;
-		}
-
-		/*
-		 * As seen in getsel:
-		 * Line endings are inconsistent in the terminal and GUI world
-		 * copy and pasting. When receiving some selection data,
-		 * replace all '\n' with '\r'.
-		 * FIXME: Fix the computer world.
-		 */
-		repl = data;
-		last = data + nitems * format / 8;
-		while ((repl = memchr(repl, '\n', last - repl))) {
-			*repl++ = '\r';
-		}
-
-		/*
-		 * A pasted ESC could end the bracket early (ESC [ 201 ~) and
-		 * have the rest run as typed input, so drop it.
-		 */
-		if (IS_SET(MODE_BRCKTPASTE)) {
-			for (src = repl = data; src < last; src++)
-				if (*src != '\033')
-					*repl++ = *src;
-			last = repl;
-		}
-
-		if (IS_SET(MODE_BRCKTPASTE) && ofs == 0)
-			sendinput("\033[200~", 6, 0);
-		sendinput((char *)data, last - data, 1);
-		if (IS_SET(MODE_BRCKTPASTE) && rem == 0)
-			sendinput("\033[201~", 6, 0);
-		XFree(data);
-		/* number of 32-bit chunks returned */
-		ofs += nitems * format / 32;
-	} while (rem > 0);
-
-	/*
-	 * Deleting the property again tells the selection owner to send the
-	 * next data chunk in the property.
-	 */
-	XDeleteProperty(xw.dpy, xw.win, (int)property);
 }
 
 void
@@ -829,6 +754,16 @@ brelease(XEvent *e)
 {
 	int btn = e->xbutton.button;
 
+	if (mouseignored & buttonmask(btn)) {
+		mouseignored &= ~buttonmask(btn);
+		return;
+	}
+	if (mousepasting & buttonmask(btn)) {
+		mousepasting &= ~buttonmask(btn);
+		pastemouseaction(e, 1);
+		return;
+	}
+
 	if (btn == Button1 && urlclick.active) {
 		if (urlclick.text && evcol(e) == urlclick.col && evrow(e) == urlclick.row) {
 			selclear();
@@ -856,6 +791,8 @@ brelease(XEvent *e)
 void
 bmotion(XEvent *e)
 {
+	if ((mouseignored | mousepasting) & Button1Mask)
+		return;
 	if (urlclick.active) {
 		if (!urlclick.text || evcol(e) != urlclick.col || evrow(e) != urlclick.row) {
 			free(urlclick.text);
@@ -2592,18 +2529,21 @@ vbellrender(double progress)
 	Picture picture, gradient;
 	XLinearGradient linear;
 	XRadialGradient radial;
+	Draw draw;
 	double half = vbellwidth / 2.0, center, inner, outer, distance;
 	int inset, width, height, n, i;
 	int depth = (MIN(win.w, win.h) + 1) / 2;
+	int bell = vbellset && depth >= 1 && vbellwidth && vbellopacity > 0 &&
+	           (!vbellanimated() || progress < 1);
 
-	if (!vbellset || depth < 1 || !vbellwidth || vbellopacity <= 0 ||
-	    (vbellanimated() && progress >= 1))
+	if (!bell && !pastemodal())
 		return xw.buf;
 	progress = MAX(0, MIN(1, progress));
 	if (!vbell.buf) {
 		vbell.buf = XCreatePixmap(xw.dpy, xw.win, win.w, win.h,
 		                         DefaultDepth(xw.dpy, xw.scr));
-		vbell.draw = XftDrawCreate(xw.dpy, vbell.buf, xw.vis, xw.cmap);
+		if (vbell.buf)
+			vbell.draw = XftDrawCreate(xw.dpy, vbell.buf, xw.vis, xw.cmap);
 	}
 	if (!vbell.draw || !(picture = XftDrawPicture(vbell.draw))) {
 		vbellfree();
@@ -2612,6 +2552,16 @@ vbellrender(double progress)
 
 	/* Always start from normal content, including text/cursor updates. */
 	XCopyArea(xw.dpy, xw.buf, vbell.buf, dc.gc, 0, 0, win.w, win.h, 0, 0);
+	/* Both overlays share the presentation pixmap. The terminal buffer
+	 * stays untouched, so dirty-line drawing works while a dialog is open. */
+	if (pastemodal()) {
+		draw = xw.draw;
+		xw.draw = vbell.draw;
+		pastedraw();
+		xw.draw = draw;
+	}
+	if (!bell)
+		return vbell.buf;
 	if (vbelleffect == VBELL_WAVE || vbelleffect == VBELL_RIPPLE) {
 		inner = 0;
 		outer = vbellwidth;
@@ -2757,6 +2707,7 @@ void
 xfinishdraw(void)
 {
 	struct timespec now;
+	Drawable frame;
 	double progress = 0;
 
 	if (vbellset) {
@@ -2764,8 +2715,17 @@ xfinishdraw(void)
 		progress = vbellprogress(now);
 		lastvbellframe = now;
 	}
-	XCopyArea(xw.dpy, vbellrender(progress), xw.win, dc.gc, 0, 0, win.w,
+	frame = vbellrender(progress);
+	XCopyArea(xw.dpy, frame, xw.win, dc.gc, 0, 0, win.w,
 			win.h, 0, 0);
+	/* If the overlay could not be set up, reuse the terminal's drawing
+	 * context on the window. A modal dialog must stay visible, and drawing
+	 * it here still leaves the terminal buffer clean for the next frame. */
+	if (frame == xw.buf && pastemodal()) {
+		XftDrawChange(xw.draw, xw.win);
+		pastedraw();
+		XftDrawChange(xw.draw, xw.buf);
+	}
 	XSetForeground(xw.dpy, dc.gc,
 			dc.col[IS_SET(MODE_REVERSE)?
 				defaultfg : defaultbg].pixel);
@@ -2954,6 +2914,8 @@ kpress(XEvent *ev)
 	} else {
 		len = XLookupString(e, buf, sizeof buf, &ksym, NULL);
 	}
+	if (pastekey(ksym, e->state))
+		return;
 	/* 1. shortcuts */
 	for (bp = shortcuts; bp < shortcuts + LEN(shortcuts); bp++) {
 		if (ksym == bp->keysym && match(bp->mod, e->state)) {
@@ -3036,7 +2998,7 @@ run(void)
 	fd_set rfd, wfd;
 	int xfd = XConnectionNumber(xw.dpy), ttyfd, xev, drawing;
 	struct timespec seltv, *tv, now, trigger;
-	double timeout, urlremain, bellremain;
+	double timeout, urlremain, bellremain, pasteremain;
 
 	/* Waiting for window mapping */
 	do {
@@ -3059,6 +3021,10 @@ run(void)
 
 	clock_gettime(CLOCK_MONOTONIC, &lastblink);
 	for (timeout = -1, drawing = 0;;) {
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		pasteremain = pasteremaining(now);
+		if (pasteremain >= 0 && (timeout < 0 || pasteremain < timeout))
+			timeout = pasteremain;
 		FD_ZERO(&rfd);
 		FD_ZERO(&wfd);
 		FD_SET(ttyfd, &rfd);
@@ -3080,6 +3046,7 @@ run(void)
 			die("select failed: %s\n", strerror(errno));
 		}
 		clock_gettime(CLOCK_MONOTONIC, &now);
+		pasteremaining(now);
 
 		if (FD_ISSET(ttyfd, &wfd))
 			ttyflushreplies();

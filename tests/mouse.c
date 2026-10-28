@@ -5,6 +5,7 @@
 #define main st_main
 #include "../x.c"
 #undef main
+#include "paste-time.h"
 
 void testmouse_init(int, int, int);
 void testmouse_put(const char *);
@@ -12,7 +13,7 @@ int testmouse_offset(void);
 int testmouse_alldirty(void);
 
 static int paste_requests, attribute_changes;
-static const char *paste_text = "pasted text\nnext line";
+static const char *paste_text = "pasted text";
 
 /* Clipboard transport is mocked; terminal parsing and tty I/O are real. */
 int XSetSelectionOwner(Display *d, Atom a, Window w, Time t) { return 0; }
@@ -180,6 +181,7 @@ main(void)
 		event(MotionNotify, 0, i, 0, 0);
 		click(i, 1, 0);
 	}
+	pasteclear(); /* Discard the unserved mock middle-click request. */
 	expect_input(sockets[1], NULL);
 
 	/* Plain dragging copies to PRIMARY without needing a modifier. */
@@ -228,9 +230,13 @@ main(void)
 	assert(paste_requests == 1);
 	expect_input(sockets[1], NULL);
 	pasted.xselection.type = SelectionNotify;
-	pasted.xselection.property = XA_PRIMARY;
+	pasted.xselection.property = paste.property;
+	pasted.xselection.selection = XA_PRIMARY;
+	pasted.xselection.target = xsel.xtarget;
+	pasted.xselection.time = paste.time;
+	pasted.xselection.requestor = paste.window;
 	selnotify(&pasted);
-	expect_input(sockets[1], "pasted text\rnext line");
+	expect_input(sockets[1], "pasted text");
 
 	/* Alternate-screen apps cannot take over selection or wheel events either. */
 	testmouse_put("\033[?1049h\033[?1003;1006h\033[Halt text");
@@ -246,15 +252,34 @@ main(void)
 	expect_input(sockets[1], NULL);
 	testmouse_put("\033[?2004h");
 	click(Button2, 1, 0);
+	pasted.xselection.time = paste.time;
+	pasted.xselection.requestor = paste.window;
 	selnotify(&pasted);
-	expect_input(sockets[1], "\033[200~pasted text\rnext line\033[201~");
+	expect_input(sockets[1], "\033[200~pasted text\033[201~");
 	/* Pasted ESC bytes cannot end the bracket early and inject input. */
 	paste_text = "a\033[201~echo pwned\n\033\033";
+	selpaste(NULL);
+	pasted.xselection.time = paste.time;
+	pasted.xselection.requestor = paste.window;
 	selnotify(&pasted);
+	expect_input(sockets[1], NULL);
+	assert(paste.state == PASTE_CONFIRM);
+	paste.shown.tv_sec -= 1; /* past the delay before choices apply */
+	pastekey(XK_K, ShiftMask);
+	paste.shown.tv_sec -= 1;
+	pastekey(XK_y, 0);
 	expect_input(sockets[1], "\033[200~a[201~echo pwned\r\033[201~");
-	/* Without bracketed paste, the text is sent unchanged as before. */
+	/* Original control characters require confirmation even without brackets. */
 	testmouse_put("\033[?2004l");
+	selpaste(NULL);
+	pasted.xselection.time = paste.time;
+	pasted.xselection.requestor = paste.window;
 	selnotify(&pasted);
+	expect_input(sockets[1], NULL);
+	paste.shown.tv_sec -= 1;
+	pastekey(XK_K, ShiftMask);
+	paste.shown.tv_sec -= 1;
+	pastekey(XK_y, 0);
 	expect_input(sockets[1], "a\033[201~echo pwned\r\033\033");
 
 	/* A flood of BELs rings once per BELLGAP; later bells ring again. */

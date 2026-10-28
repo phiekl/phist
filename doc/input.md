@@ -40,7 +40,8 @@ mappings, use `phist-256color`.
 When bracketed paste is enabled, pasted ESC bytes are removed before text is
 wrapped with `ESC [ 200 ~` and `ESC [ 201 ~`. An embedded end marker
 therefore cannot end the bracket early and turn the rest of a paste into
-typed commands. Plain paste is sent unchanged.
+typed commands. Pastes also undergo [confirmation](pasting.md) independently
+of this mode; the chosen text then follows the mode's delivery rules.
 
 For a check that does not execute the pasted text, copy a crafted string,
 then paste it into `cat -v` with Ctrl+Shift+V:
@@ -50,10 +51,10 @@ printf 'harmless\033[201~id\n' | xclip -selection clipboard
 printf '\033[?2004h'; cat -v
 ```
 
-The interior text appears as `harmless[201~id`, with only phist's own ending
-`^[[201~` closing the paste. Press Ctrl+C and run `printf '\033[?2004l'`
-afterwards. Run `LC_ALL=C.UTF-8 sh tests/mouse.sh` for paste-path
-regressions.
+Choose K and confirm Yes to keep the source bytes. The interior text appears
+as `harmless[201~id`, with only phist's own ending `^[[201~` closing the paste.
+Press Ctrl+C and run `printf '\033[?2004l'` afterwards. Run `LC_ALL=C.UTF-8
+sh tests/paste.sh` for paste-path regressions.
 
 ## Short writes
 

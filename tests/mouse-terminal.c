@@ -26,6 +26,12 @@ testmouse_alldirty(void)
 	return 1;
 }
 
+void
+testmouse_cleardirty(void)
+{
+	memset(term.dirty, 0, term.row * sizeof(*term.dirty));
+}
+
 int
 testmouse_offset(void)
 {

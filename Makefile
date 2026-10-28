@@ -16,7 +16,7 @@ config.h:
 	$(CC) $(STCFLAGS) -c $<
 
 st.o: combining.h compose.h config.h st.h win.h
-x.o: arg.h config.h st.h win.h
+x.o: arg.h config.h paste.c st.h win.h
 
 $(OBJ): config.h config.mk
 
@@ -30,7 +30,7 @@ clean:
 dist: clean
 	mkdir -p phist-$(VERSION)
 	cp -R LEGACY LICENSE Makefile README.md config.mk doc tests\
-		config.def.h st.info st.1 arg.h combining.h compose.h st.h win.h $(SRC)\
+		config.def.h st.info st.1 arg.h combining.h compose.h st.h win.h paste.c $(SRC)\
 		phist-$(VERSION)
 	tar -cf - phist-$(VERSION) | gzip > phist-$(VERSION).tar.gz
 	rm -rf phist-$(VERSION)
