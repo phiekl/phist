@@ -50,6 +50,12 @@ static struct {
 	PasteOption options[PASTE_MODES];
 	int noptions, selected; /* -1 selects the preview */
 	int viewing, viewcols, viewrows; /* full view and its last layout */
+	int viewx, viewy; /* where the full view's text starts */
+	/* Selection anchor and pointer, each expressed as a character's byte range.
+	 * A position past the row's text has an empty range at its end. */
+	int marking, marked;
+	size_t markanchor[2], markpoint[2];
+	int copied; /* the full view's text was just copied, or -1 if too large */
 	int asking; /* whether to paste unmodified, after choosing k */
 	int askyes; /* Yes rather than No is selected in the question */
 	size_t viewtop; /* offset of the first row in the full view */
@@ -782,6 +788,168 @@ pastescroll(int rows)
 	}
 }
 
+/* The escaped text from i to end as in the full view, or with newlines as
+ * they are if lines is set, for copying. buf needs room for 5 bytes per
+ * byte of the paste and a terminator. Return the columns it takes. */
+static int
+pastetext(size_t i, size_t end, char *buf, int lines)
+{
+	size_t out = 0;
+	int width, used = 0;
+
+	while (i < end) {
+		if (lines && paste.data[i] == '\n') {
+			buf[out++] = paste.data[i++];
+			continue;
+		}
+		i += pasteunit(i, buf + out, &width);
+		out += strlen(buf + out);
+		used += width;
+	}
+	buf[out] = '\0';
+	return used;
+}
+
+/* The selected range of the full view's text, if any. */
+static int
+pastemarkrange(size_t *lo, size_t *hi)
+{
+	*lo = MIN(paste.markanchor[0], paste.markpoint[0]);
+	*hi = MAX(paste.markanchor[1], paste.markpoint[1]);
+	return paste.marked && *lo < *hi;
+}
+
+/* The text from lo to hi for copying: escaped, but with its newlines.
+ * Return NULL if it is too large: phist serves a selection in one request,
+ * and the server would refuse a larger one or disconnect phist. */
+static char *
+pastemarktext(size_t lo, size_t hi)
+{
+	long units = XExtendedMaxRequestSize(xw.dpy);
+	char *text = xmalloc((hi - lo) * 5 + 1);
+
+	if (!units)
+		units = XMaxRequestSize(xw.dpy);
+	pastetext(lo, hi, text, 1);
+	/* Leave room for the ChangeProperty request's 24 bytes and the
+	 * 4 bytes of a big request's length; the text is padded to units. */
+	if (strlen(text) > (size_t)units * 4 - 28) {
+		free(text);
+		return NULL;
+	}
+	return text;
+}
+
+/* Find the character of the full view at a cell, clamped to the rows of
+ * text, as its start and end in at[], or the end of the row's text twice
+ * beyond it. If dragging, rows above or below the text scroll by one. */
+static void
+pastehit(int col, int row, int dragging, size_t at[2])
+{
+	size_t i, next, n;
+	char unit[16];
+	int r, x = 0, width;
+
+	if (dragging && row < paste.viewy)
+		pastescroll(-1);
+	else if (dragging && row >= paste.viewy + paste.viewrows)
+		pastescroll(1);
+	row = MAX(0, MIN(row - paste.viewy, paste.viewrows - 1));
+	col -= paste.viewx;
+	for (i = paste.viewtop, r = 0; r < row && i < paste.len; r++)
+		i = pasterow(i, paste.viewcols, NULL);
+	next = pasterow(i, paste.viewcols, NULL);
+	for (; col >= 0 && i < next; i += n, x += width) {
+		n = pasteunit(i, unit, &width);
+		if (col < x + width) {
+			at[0] = i;
+			at[1] = i + n;
+			return;
+		}
+	}
+	at[0] = at[1] = col < 0 ? i : next;
+}
+
+/* Keep coordinates outside the window so edge dragging can scroll.
+ * Any drag selects the initial character, even within its displayed width.
+ * Releasing over another character also selects without a motion event. */
+static void
+pastemarkto(XEvent *e, int dragging)
+{
+	int x = e->xbutton.x - borderpx, y = e->xbutton.y - borderpx;
+
+	pastehit(x < 0 ? -1 : x / win.cw, y < 0 ? -1 : y / win.ch, dragging,
+	         paste.markpoint);
+	paste.marked |= dragging ||
+	                paste.markpoint[0] != paste.markanchor[0] ||
+	                paste.markpoint[1] != paste.markanchor[1];
+}
+
+/* Button1 selects text in the full view, as long as it is open; return
+ * whether the view took the event. On release, the selection becomes
+ * PRIMARY like the terminal's; a click without a drag leaves PRIMARY. */
+static int
+pastemouse(XEvent *e)
+{
+	size_t lo, hi;
+	char *text;
+
+	if (paste.state != PASTE_CONFIRM || !paste.viewing)
+		return 0;
+	if (e->type == ButtonPress) {
+		if (e->xbutton.button != Button1)
+			return 0;
+		paste.marking = 1;
+		paste.marked = 0;
+		paste.copied = 0;
+		pastehit(evcol(e), evrow(e), 0, paste.markanchor);
+		memcpy(paste.markpoint, paste.markanchor, sizeof(paste.markpoint));
+		return 1;
+	}
+	if (!paste.marking)
+		return 0;
+	if (e->type == MotionNotify) {
+		pastemarkto(e, 1);
+		return 1;
+	}
+	if (e->xbutton.button != Button1)
+		return 0;
+	/* Motion need not have reported where the button was released. */
+	pastemarkto(e, 0);
+	paste.marking = 0;
+	if (pastemarkrange(&lo, &hi)) {
+		if ((text = pastemarktext(lo, hi))) {
+			selclear();
+			setsel(text, e->xbutton.time);
+		} else {
+			paste.copied = -1;
+		}
+	}
+	return 1;
+}
+
+/* Copy the selected text of the full view, or all of it, to CLIPBOARD. */
+static void
+pastecopy(void)
+{
+	size_t lo, hi;
+	char *text;
+
+	if (!pastemarkrange(&lo, &hi)) {
+		lo = 0;
+		hi = paste.len;
+	}
+	if (!(text = pastemarktext(lo, hi))) {
+		paste.copied = -1;
+		return;
+	}
+	free(xsel.clipboard);
+	xsel.clipboard = text;
+	XSetSelectionOwner(xw.dpy, XInternAtom(xw.dpy, "CLIPBOARD", 0), xw.win,
+	                   CurrentTime);
+	paste.copied = 1;
+}
+
 /* Scroll the full view by rows for the wheel; return whether it is open,
  * as otherwise the wheel scrolls history. */
 static int
@@ -825,6 +993,14 @@ pastechoose(int mode)
 	clock_gettime(CLOCK_MONOTONIC, &paste.shown);
 }
 
+/* Ctrl+C, which cancels, but not Ctrl+Shift+C, which copies in phist. */
+static int
+pastectrlc(KeySym key, uint state)
+{
+	return (key == XK_c || key == XK_C) && (state & ControlMask) &&
+	       !(state & ShiftMask);
+}
+
 int
 pastekey(KeySym key, uint state)
 {
@@ -840,7 +1016,7 @@ pastekey(KeySym key, uint state)
 		/* Esc, Ctrl+C or Enter close the failure box; it takes all
 		 * other keys while it is shown. */
 		if (key == XK_Escape || key == XK_Return || key == XK_KP_Enter ||
-		    ((key == XK_c || key == XK_C) && (state & ControlMask))) {
+		    pastectrlc(key, state)) {
 			if (!pastetooearly(pastefail.shown))
 				pastefailclear();
 		}
@@ -848,10 +1024,20 @@ pastekey(KeySym key, uint state)
 	}
 	if (paste.state != PASTE_CONFIRM)
 		return 0;
+	/* The binding to clipcopy, Ctrl+Shift+C, copies in the full view
+	 * as c does, and does nothing elsewhere; it never cancels. */
+	for (bp = shortcuts; bp < shortcuts + LEN(shortcuts); bp++) {
+		if (key == bp->keysym && match(bp->mod, state) &&
+		    bp->func == clipcopy) {
+			if (paste.viewing)
+				pastecopy();
+			return 1;
+		}
+	}
 	if (key >= XK_A && key <= XK_Z)
 		key += XK_a - XK_A;
 	if ((key == XK_Escape && !paste.viewing && !paste.asking) ||
-	    (key == XK_c && (state & ControlMask))) {
+	    pastectrlc(key, state)) {
 		pasteclear();
 		return 1;
 	}
@@ -890,10 +1076,13 @@ pastekey(KeySym key, uint state)
 		return 1;
 	}
 	if (paste.viewing) {
+		paste.copied = 0;
 		switch (key) {
 		case XK_Escape: case XK_Return: case XK_KP_Enter: case XK_q: case XK_v:
 			paste.viewing = 0;
+			paste.marking = paste.marked = 0;
 			break;
+		case XK_c: pastecopy(); break;
 		case XK_Up: case XK_KP_Up: pastescroll(-1); break;
 		case XK_Down: case XK_KP_Down: pastescroll(1); break;
 		case XK_Prior: case XK_KP_Prior: pastescroll(-page); break;
@@ -1231,13 +1420,40 @@ pasteroom(const PasteLine *lines, int i)
 	                 lines[i - 1].kind == PASTE_GAP);
 }
 
+/* Draw the full view's row from i to next, inverting what is selected. */
 static void
-pastedrawview(int cols, int rows, Color *fg)
+pastedrawrow(size_t i, size_t next, int left, int y, int inner, char *buf,
+             Color *fg, Color *bg)
+{
+	size_t lo, hi, a, b;
+	int x, w;
+
+	if (!pastemarkrange(&lo, &hi))
+		lo = hi = next;
+	a = MAX(i, MIN(lo, next));
+	b = MAX(a, MIN(hi, next));
+	x = pastetext(i, a, buf, 0);
+	pastedrawline(buf, left, y, inner, fg);
+	if (a < b && x < inner) {
+		w = MIN(pastetext(a, b, buf, 0), inner - x);
+		pastedrawrect(fg, left + x, y, w, 1);
+		pastedrawline(buf, left + x, y, w, bg);
+		x += w;
+	}
+	if (b < next && x < inner) {
+		pastetext(b, next, buf, 0);
+		pastedrawline(buf, left + x, y, inner - x, fg);
+	}
+}
+
+static void
+pastedrawview(int cols, int rows, Color *fg, Color *bg)
 {
 	char *buf;
 	int padx = cols >= 12 ? 2 : 0, pady = rows >= 7, inner, height, top, left, y;
 	int titled, n;
-	size_t row;
+	size_t row, next, lo, hi;
+	const char *label;
 
 	inner = MAX(1, cols - 2 * padx - (cols >= 8 ? 2 : 0));
 	height = rows - (rows >= 5 ? 2 : 0);
@@ -1255,17 +1471,30 @@ pastedrawview(int cols, int rows, Color *fg)
 		pastedrawline(pastetitle(), left, y++, inner, fg);
 		y += pady;
 	}
+	paste.viewx = left;
+	paste.viewy = y;
 	for (row = paste.viewtop; y < top + height - (titled ? 1 + pady : 0); y++) {
 		if (row >= paste.len)
 			break;
-		row = pasterow(row, inner, buf);
-		pastedrawline(buf, left, y, inner, fg);
+		next = pasterow(row, inner, NULL);
+		pastedrawrow(row, next, left, y, inner, buf, fg, bg);
+		row = next;
 	}
 	if (titled) {
-		/* Only the position, flush right. */
+		/* Right-align the scroll position; show the copy key and label if they fit. */
+		y = top + height - pady - 1;
 		n = snprintf(buf, 16, "%d%%",
 		             row >= paste.len ? 100 : (int)(100 * (double)row / paste.len));
-		pastedrawline(buf, left + MAX(0, inner - n), top + height - pady - 1, MIN(n, inner), fg);
+		pastedrawline(buf, left + MAX(0, inner - n), y, MIN(n, inner), fg);
+		if (inner >= n + 4) {
+			pastedrawkey(left + 1, y, 0);
+			pastedrawline("C", left + 1, y, 1, fg);
+		}
+		label = paste.copied > 0 ? "Copied to clipboard" :
+		        paste.copied < 0 ? "Too large to copy" :
+		        pastemarkrange(&lo, &hi) ? "Copy selection" : "Copy all";
+		if (pastewidth(label) <= inner - n - 6)
+			pastedrawline(label, left + 5, y, inner - n - 6, fg);
 	}
 	free(buf);
 }
@@ -1463,7 +1692,7 @@ pastedraw(void)
 		return;
 	}
 	if (paste.viewing) {
-		pastedrawview(cols, rows, fg);
+		pastedrawview(cols, rows, fg, bg);
 		return;
 	}
 

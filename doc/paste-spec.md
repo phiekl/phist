@@ -190,7 +190,10 @@ e.g. `Keep LF` or `Keep LF, keep TAB`.
   choices, other blank lines, chips, title bar, preview. Choices then
   scroll, with ▲/▼ markers.
 - Full view: the same title bar, the paste wrapped and split at newlines,
-  and the scroll position (e.g. `42%`) flush right below it.
+  and below it `C` on a key cap like the choices', labeled `Copy all`,
+  `Copy selection` or, after copying, `Copied to clipboard` or `Too
+  large to copy`, and the scroll position (e.g. `42%`) flush right. A
+  label that does not fit is left out, then the key cap.
 
 ## 7. Keys
 
@@ -199,15 +202,18 @@ e.g. `Keep LF` or `Keep LF, keep TAB`.
 | `s`, `p`, `t` (either case) | apply that choice                      | ignored          |
 | `v` (either case)           | open the full view (no delay); the preview stays selected | back to the dialog |
 | `k` (either case)           | ask before pasting the original        | ignored          |
+| `c` (either case)           | ignored                                | copy the selected text, or all of it, to CLIPBOARD |
 | Up / Down                   | move the selection; Up from the first choice selects the preview | scroll one row |
 | Tab / Shift+Tab             | like Down / Up                         | ignored          |
 | Home / End                  | first / last choice                    | top / bottom     |
 | PgUp / PgDn, Space          | -                                      | scroll a page    |
 | mouse wheel                 | scroll terminal history                | scroll `mousescrolllines` rows |
+| Button1 drag                | ignored                                | select text, which becomes PRIMARY |
 | Enter, keypad Enter         | apply the selected choice (asking first for `K`), or open the full view on the preview | back to the dialog |
 | `q`                         | -                                      | back to the dialog |
 | Esc                         | cancel                                 | back to the dialog |
-| Ctrl+C                      | cancel                                 | cancel           |
+| Ctrl+C, also with Caps Lock | cancel                                 | cancel           |
+| Ctrl+Shift+C (`clipcopy`)   | ignored                                | like `c`         |
 | other Ctrl/Alt combinations | ignored                                | ignored          |
 
 Choices, by key or Enter, are ignored for 500 ms (`pasteenterdelay`)
@@ -222,6 +228,26 @@ further paste requests are ignored while a paste is being transferred or
 confirmed. A drag begun before the dialog appeared still ends normally. The
 wheel still scrolls, as in the table above, but its press and release
 run no mouse binding either.
+
+In the full view, dragging Button1 selects text as shown, in whole
+escaped characters: `\n` or `\x1b` is selected or not as a unit. As in
+the terminal, any drag selects the character it began on, even one
+that never leaves that character, and the characters up to the one
+under the pointer. The selection is shown inverted, kept while scrolling, and
+ends where the button is released, when it becomes PRIMARY like a selection
+in the terminal; a click without a drag clears the selection shown,
+leaving PRIMARY as it was. Dragging above or below the text, also
+outside the window, scrolls a row per motion. Copied text is escaped as
+shown, a backslash as `\\` included, but newlines are copied as they
+are, so it holds no other control characters. `c`, or phist's copy binding
+Ctrl+Shift+C, copies the selection, or the whole paste if there is none,
+to CLIPBOARD; its label below the text then says `Copied to clipboard`
+until the next key. phist serves a selection in a single X request, so text
+larger than the server's maximum request is not copied, to CLIPBOARD or
+PRIMARY, and the label says `Too large to copy` instead: a 4 MiB paste
+of control characters escapes to 16 MiB, past the usual limit. Leaving
+the full view clears the selection; a drag still in progress then ends
+without claiming PRIMARY.
 
 The dialog and failure box are drawn on a fresh copy of the terminal
 buffer, shared with the visual bell. Terminal output behind them stays

@@ -74,6 +74,10 @@ void XftDrawDestroy(Draw d) { assert(d == (Draw)3); }
 int XFreePixmap(Display *d, Pixmap p) { assert(p == 3); return 0; }
 
 int XFree(void *p) { free(p); return 0; }
+/* The server's request size in 4-byte units, with BIG-REQUESTS or without. */
+static long bigrequests = 4194303, requestsize = 65535;
+long XExtendedMaxRequestSize(Display *d) { return bigrequests; }
+long XMaxRequestSize(Display *d) { return requestsize; }
 int XFlush(Display *d) { return 0; }
 int XDeleteProperty(Display *d, Window w, Atom a) { deletes++; return 0; }
 
@@ -377,6 +381,38 @@ drain(void)
 	assert(!pastedrain.window && deletes == deleted + 2);
 }
 
+/* Press, drag or release a button at a cell. */
+static void
+mouseat(int type, uint button, int col, int row)
+{
+	XEvent e = { .xbutton = { .type = type, .window = xw.win, .button = button,
+	             .x = borderpx + col * win.cw, .y = borderpx + row * win.ch } };
+
+	if (type == ButtonPress)
+		bpress(&e);
+	else if (type == ButtonRelease)
+		brelease(&e);
+	else
+		bmotion(&e);
+}
+
+/* Drag Button1 from one cell to another. */
+static void
+drag(int col, int row, int tocol, int torow)
+{
+	mouseat(ButtonPress, Button1, col, row);
+	mouseat(MotionNotify, 0, tocol, torow);
+	mouseat(ButtonRelease, Button1, tocol, torow);
+}
+
+/* Click Button1 at a cell, without moving. */
+static void
+clickat(int col, int row)
+{
+	mouseat(ButtonPress, Button1, col, row);
+	mouseat(ButtonRelease, Button1, col, row);
+}
+
 /* Turn the wheel a step, up for Button4 and down for Button5. */
 static void
 wheel(uint button)
@@ -605,13 +641,20 @@ testcontrols(int fd)
 	press(XK_Escape, 0);
 	assert(paste.state == PASTE_IDLE);
 	expect(fd, NULL);
-	/* Ctrl+C cancels as well, also with Caps Lock or Shift. */
+	/* Ctrl+C cancels as well, also with Caps Lock, but not Ctrl+Shift+C,
+	 * which copies in phist: it does nothing in the dialog. */
 	transfer("cancel\n", 7);
 	press(XK_c, ControlMask);
 	assert(paste.state == PASTE_IDLE);
 	transfer("cancel\n", 7);
-	press(XK_C, ControlMask | ShiftMask | LockMask);
+	press(XK_C, ControlMask | LockMask);
 	assert(paste.state == PASTE_IDLE);
+	transfer("cancel\n", 7);
+	owned = 0;
+	press(XK_C, ControlMask | ShiftMask);
+	press(XK_C, ControlMask | ShiftMask | LockMask);
+	assert(paste.state == PASTE_CONFIRM && owned == 0);
+	press(XK_Escape, 0);
 	expect(fd, NULL);
 
 	/* Check mode at delivery, after an arbitrary wait at the dialog. */
@@ -1640,7 +1683,8 @@ testdialog(int fd)
 	Rect *bar;
 	XEvent click = {0};
 	size_t limit;
-	int x, asked;
+	int x, asked, i, n;
+	char *primary;
 
 	mincontrast = 0;
 	emojifont = NULL;
@@ -2207,7 +2251,7 @@ testdialog(int fd)
 	assert(painted[5][54] == 'x' && painted[5][55] == '\\' && painted[5][56] == 'n');
 	assert(dialogrow("line 00\\n") == 6 && dialogrow("line 10\\n") == 16);
 	assert(dialogrow("line 11") < 0);
-	/* Only the position, flush right, is below the paste. */
+	/* Below the paste, the position is flush right, with no help text. */
 	assert(painted[17][76] == '%' && !painted[17][3] && dialogrow("scroll") == -1);
 	press(XK_Up, 0);
 	assert(paste.viewtop == 0);
@@ -2249,6 +2293,160 @@ testdialog(int fd)
 		wheel(Button4);
 		assert(paste.viewtop == 0 && testmouse_offset() == offset);
 	}
+	/* Button1 selects the text as shown, whole escaped characters, from
+	 * either end; releasing it makes the selection PRIMARY, escaped but
+	 * for its newlines. */
+	assert(paste.viewx == 3 && paste.viewy == 3);
+	owned = 0;
+	drag(3, 6, 6, 7);
+	assert(owned == 1 && !strcmp(xsel.primary, "line 00\nline"));
+	drawdialog();
+	assert(painted[6][3] == 'l' && painted[7][6] == 'e' && painted[7][7] == ' ');
+	assert(ink[6][3] == ink[7][6] && ink[7][6] != ink[7][7]);
+	assert(ink[7][7] == ink[8][3]);
+	drag(6, 7, 3, 6);
+	assert(owned == 2 && !strcmp(xsel.primary, "line 00\nline"));
+	drag(55, 5, 4, 6);
+	assert(!strcmp(xsel.primary, "\nli"));
+	/* Beyond a row's text, up to its end; left of it, from its start. */
+	drag(5, 6, 40, 6);
+	assert(!strcmp(xsel.primary, "ne 00\n"));
+	drag(0, 7, 4, 7);
+	assert(!strcmp(xsel.primary, "li"));
+	/* A drag within the character pressed on selects it, as in the
+	 * terminal, escaped ones too. */
+	drag(3, 6, 3, 6);
+	assert(owned == 6 && !strcmp(xsel.primary, "l"));
+	drag(56, 5, 55, 5);
+	assert(owned == 7 && !strcmp(xsel.primary, "\n"));
+	/* A click without a drag selects nothing and leaves PRIMARY. */
+	clickat(3, 6);
+	assert(owned == 7 && !paste.marked && !strcmp(xsel.primary, "\n"));
+	drawdialog();
+	assert(ink[6][3] == ink[8][3]);
+	/* Dragging below or above the text scrolls by a row each motion, the
+	 * selection following. */
+	mouseat(ButtonPress, Button1, 3, 16);
+	mouseat(MotionNotify, 0, 3, 18);
+	assert(paste.viewtop == 74);
+	mouseat(MotionNotify, 0, 3, 18);
+	assert(paste.viewtop == 148);
+	mouseat(ButtonRelease, Button1, 3, 18);
+	assert(!strcmp(xsel.primary, "line 10\nline 11\nl"));
+	mouseat(ButtonPress, Button1, 3, 3);
+	mouseat(MotionNotify, 0, 3, 0);
+	assert(paste.viewtop == 74);
+	mouseat(ButtonRelease, Button1, 3, 0);
+	assert(strlen(xsel.primary) == 75 && strspn(xsel.primary, "x") == 75);
+	press(XK_Home, 0);
+	/* Other buttons do nothing in the view, and closing it ends a drag
+	 * without claiming PRIMARY. */
+	asked = requests;
+	owned = 0;
+	mouseat(ButtonPress, Button2, 3, 6);
+	mouseat(ButtonRelease, Button2, 3, 6);
+	mouseat(ButtonPress, Button3, 3, 6);
+	mouseat(ButtonRelease, Button3, 3, 6);
+	assert(requests == asked && owned == 0);
+	mouseat(ButtonPress, Button1, 3, 6);
+	mouseat(MotionNotify, 0, 8, 6);
+	press(XK_q, 0);
+	mouseat(ButtonRelease, Button1, 8, 6);
+	assert(owned == 0 && !paste.marked);
+	press(XK_Return, 0);
+	assert(paste.viewing && !paste.marked);
+	drawdialog();
+	assert(ink[6][3] == ink[8][3]);
+	/* c copies the selection, or else all of the text, to CLIPBOARD, and
+	 * says so until the next key. Below the text, it is on a raised key
+	 * cap like the dialog's, with what it copies. */
+	assert(dialogrow("Copy all") == 17 && painted[17][4] == 'C' && painted[17][8] == 'C');
+	for (i = n = 0; i < nblends; i++)
+		n += blends[i].alpha == 0x4000 && blends[i].red == 0x4000 &&
+		     blends[i].x == 3 * win.cw && blends[i].w == 3 * win.cw &&
+		     blends[i].y == 17 * win.ch + 1;
+	assert(n == 1);
+	press(XK_c, 0);
+	assert(owned == 1 && paste.copied && xsel.clipboard);
+	assert(!strncmp(xsel.clipboard, "xxx", 3) && strlen(xsel.clipboard) == 200 + 1 + 30 * 8);
+	assert(!strncmp(xsel.clipboard + 200, "\nline 00\nline 01\n", 17));
+	drawdialog();
+	assert(dialogrow("Copied to clipboard") == 17 && painted[17][8] == 'C');
+	assert(dialogrow("Copy all") == -1);
+	drag(3, 6, 6, 6);
+	drawdialog();
+	assert(dialogrow("Copy selection") == 17);
+	press(XK_C, ShiftMask);
+	assert(owned == 3 && !strcmp(xsel.clipboard, "line"));
+	press(XK_Down, 0);
+	press(XK_Up, 0);
+	drawdialog();
+	assert(dialogrow("Copied to clipboard") == -1 && paste.marked);
+	press(XK_c, Mod1Mask); /* not with Alt; Ctrl+C cancels */
+	assert(owned == 3 && paste.viewing);
+	/* Ctrl+Shift+C, phist's copy binding, copies as c does. */
+	drag(3, 7, 9, 7);
+	assert(owned == 4 && !strcmp(xsel.primary, "line 01"));
+	press(XK_C, ControlMask | ShiftMask);
+	assert(owned == 5 && paste.viewing && paste.copied > 0);
+	assert(!strcmp(xsel.clipboard, "line 01"));
+	/* The release position counts, though no motion reported it. */
+	mouseat(ButtonPress, Button1, 3, 6);
+	mouseat(MotionNotify, 0, 4, 6);
+	mouseat(ButtonRelease, Button1, 9, 6);
+	assert(owned == 6 && !strcmp(xsel.primary, "line 00"));
+	mouseat(ButtonPress, Button1, 3, 7);
+	mouseat(ButtonRelease, Button1, 6, 7);
+	assert(owned == 7 && !strcmp(xsel.primary, "line"));
+	/* What one request cannot carry, as phist serves a selection in one, is
+	 * not copied, with BIG-REQUESTS or without: 28 bytes of a request go
+	 * to its header and a big request's length, here 36 are left. */
+	for (i = 0; i < 2; i++) {
+		if (i)
+			bigrequests = 16;
+		else
+			bigrequests = 0, requestsize = 16;
+		clickat(3, 6); /* nothing selected: c copies all */
+		press(XK_c, 0);
+		assert(owned == 7 && paste.copied < 0);
+		assert(!strcmp(xsel.clipboard, "line 01"));
+		drawdialog();
+		assert(dialogrow("Too large to copy") == 17);
+		primary = xsel.primary;
+		drag(3, 3, 3, 4); /* 75 bytes */
+		assert(owned == 7 && paste.copied < 0 && xsel.primary == primary);
+		drag(3, 6, 9, 7);
+		assert(owned == 8 && !strcmp(xsel.primary, "line 00\nline 01"));
+		/* Exactly at the limit: 10 units take 12 bytes, not 13. */
+		*(i ? &bigrequests : &requestsize) = 10;
+		drag(3, 6, 6, 7);
+		assert(owned == 9 && !strcmp(xsel.primary, "line 00\nline"));
+		drag(3, 6, 7, 7);
+		assert(owned == 9 && paste.copied < 0);
+		assert(!strcmp(xsel.primary, "line 00\nline"));
+		owned = 7;
+	}
+	bigrequests = 4194303, requestsize = 65535;
+	/* A label that does not fit is left out rather than cut short. */
+	resizewindow(18, 20);
+	drawdialog();
+	assert(painted[17][4] == 'C' && !painted[17][8] && dialogrow("Copy") == -1);
+	/* Dragging past the window's edges scrolls, even when the text fills
+	 * it and there is no row above or below it inside the window. */
+	resizewindow(80, 2);
+	press(XK_Home, 0);
+	drawdialog();
+	assert(paste.viewy == 0 && paste.viewrows == 2);
+	mouseat(ButtonPress, Button1, 3, 1);
+	mouseat(MotionNotify, 0, 3, 2);
+	assert(paste.viewtop == 74);
+	mouseat(MotionNotify, 0, 3, -1);
+	assert(paste.viewtop == 0);
+	mouseat(ButtonRelease, Button1, 3, -1);
+	resizewindow(80, 20);
+	drawdialog();
+	press(XK_Escape, 0);
+	press(XK_Return, 0);
 	/* Ctrl or Alt combinations do nothing in the full view either. */
 	press(XK_Down, ControlMask);
 	press(XK_Next, Mod1Mask);
@@ -2281,6 +2479,15 @@ testdialog(int fd)
 	press(XK_c, ControlMask);
 	assert(paste.state == PASTE_IDLE);
 	expect(fd, NULL);
+	/* Copies keep newlines as they are, and every other escape, a
+	 * backslash's included, so they cannot be read differently. */
+	transfer("a\tb\\n\r\n\033", 8);
+	press(XK_v, 0);
+	press(XK_c, 0);
+	assert(!strcmp(xsel.clipboard, "a\\tb\\\\n\\r\n\\x1b"));
+	press(XK_Escape, 0);
+	press(XK_Escape, 0);
+	assert(paste.state == PASTE_IDLE);
 
 	/* Every size draws inside the window and keeps the selection visible. */
 	transfer(examples[4].text.s, examples[4].text.n);

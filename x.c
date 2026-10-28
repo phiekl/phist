@@ -621,13 +621,15 @@ bpress(XEvent *e)
 	/* The paste dialog and failure box are modal: clicks do nothing
 	 * beneath them, not even on release, which could republish an old
 	 * selection. A drag begun before them still ends. Under the failure
-	 * box, a paste binding retries, and does nothing else. */
+	 * box, a paste binding retries, and does nothing else. In the paste's
+	 * full view, Button1 selects its text, ignored once the view closes. */
 	if (pastemodal()) {
 		if (paste.state != PASTE_CONFIRM && pastemousebinding(e)) {
 			mousepasting |= buttonmask(btn);
 			pastemouseaction(e, 0);
 		} else {
 			mouseignored |= buttonmask(btn);
+			pastemouse(e);
 		}
 		return;
 	}
@@ -754,6 +756,10 @@ brelease(XEvent *e)
 {
 	int btn = e->xbutton.button;
 
+	if (pastemouse(e)) {
+		mouseignored &= ~buttonmask(btn);
+		return;
+	}
 	if (mouseignored & buttonmask(btn)) {
 		mouseignored &= ~buttonmask(btn);
 		return;
@@ -791,6 +797,8 @@ brelease(XEvent *e)
 void
 bmotion(XEvent *e)
 {
+	if (pastemouse(e))
+		return;
 	if ((mouseignored | mousepasting) & Button1Mask)
 		return;
 	if (urlclick.active) {

@@ -91,3 +91,37 @@ and reenabling bracketed paste during the check.
 [The paste specification](paste-spec.md) defines exact character classes,
 labels, key behavior, layout, transformations and X transfer handling. Run
 `LC_ALL=C.UTF-8 sh tests/paste.sh` for regression coverage.
+
+## Copying from the full view
+
+In V's full view, drag Button1 to select text, including across rows and in
+either direction. Escaped characters such as `\x1b` are indivisible units.
+Any drag includes its starting character, even if it never leaves that
+character; the final pointer position on release sets its end. The selection
+stays highlighted while scrolling and becomes PRIMARY on release. A click
+without a drag clears the highlight and leaves PRIMARY as it was. Dragging above
+or below the text, even outside the window, scrolls a row per motion. Closing
+the view during a drag does not claim PRIMARY.
+
+C or the configured copy binding (normally Ctrl+Shift+C) copies the
+selection, or the whole paste if nothing is selected, to CLIPBOARD. Ctrl+C
+without Shift still cancels. The footer changes from `Copy all` to `Copy
+selection` and then `Copied to clipboard` until the next key. Narrow windows
+omit the label, then the key cap, when they cannot fit.
+
+Copies use the escaped text shown: tabs, CR, ESC and backslashes stay
+escaped, so a literal backslash followed by `n` cannot be mistaken for a
+newline. Actual newlines are copied as newlines although the view shows
+`\n`. The copied text contains no other control characters.
+
+Copies exceeding one X property request are refused with `Too large to
+copy`, for both PRIMARY and CLIPBOARD. Escaping may multiply the size by
+four, making this relevant well below the incoming paste limit. The
+calculation reserves the request header (24 bytes), BIG-REQUESTS length
+field (four bytes) and four-byte alignment, accepting exactly what fits.
+
+The paste suite checks drags within escaped characters, rows and window
+edges; release positions; scrolling, clicks and closing mid-drag; drawing
+and narrow layouts; both copy keys with and without a selection; escaped
+output and cancellation; and sizes exactly at and beyond the request limit
+with and without BIG-REQUESTS.
