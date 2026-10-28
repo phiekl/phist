@@ -114,14 +114,13 @@ escaped, so a literal backslash followed by `n` cannot be mistaken for a
 newline. Actual newlines are copied as newlines although the view shows
 `\n`. The copied text contains no other control characters.
 
-Copies exceeding one X property request are refused with `Too large to
-copy`, for both PRIMARY and CLIPBOARD. Escaping may multiply the size by
-four, making this relevant well below the incoming paste limit. The
-calculation reserves the request header (24 bytes), BIG-REQUESTS length
-field (four bytes) and four-byte alignment, accepting exactly what fits.
+Copies have no separate size limit. Escaping may turn a 32 MiB paste into
+128 MiB of text; phist sends selections too large for one X request
+[incrementally](selection.md#sending-large-selections), for both PRIMARY and
+CLIPBOARD.
 
 The paste suite checks drags within escaped characters, rows and window
 edges; release positions; scrolling, clicks and closing mid-drag; drawing
 and narrow layouts; both copy keys with and without a selection; escaped
-output and cancellation; and sizes exactly at and beyond the request limit
-with and without BIG-REQUESTS.
+output and cancellation. `tests/selsend.sh` checks large outgoing transfers
+and X request-size boundaries.

@@ -191,9 +191,9 @@ e.g. `Keep LF` or `Keep LF, keep TAB`.
   scroll, with ▲/▼ markers.
 - Full view: the same title bar, the paste wrapped and split at newlines,
   and below it `C` on a key cap like the choices', labeled `Copy all`,
-  `Copy selection` or, after copying, `Copied to clipboard` or `Too
-  large to copy`, and the scroll position (e.g. `42%`) flush right. A
-  label that does not fit is left out, then the key cap.
+  `Copy selection` or, after copying, `Copied to clipboard`, and the
+  scroll position (e.g. `42%`) flush right. A label that does not fit is
+  left out, then the key cap.
 
 ## 7. Keys
 
@@ -242,10 +242,9 @@ shown, a backslash as `\\` included, but newlines are copied as they
 are, so it holds no other control characters. `c`, or phist's copy binding
 Ctrl+Shift+C, copies the selection, or the whole paste if there is none,
 to CLIPBOARD; its label below the text then says `Copied to clipboard`
-until the next key. phist serves a selection in a single X request, so text
-larger than the server's maximum request is not copied, to CLIPBOARD or
-PRIMARY, and the label says `Too large to copy` instead: a 4 MiB paste
-of control characters escapes to 16 MiB, past the usual limit. Leaving
+until the next key. Copies have no size limit of their own: escaping can
+make a 32 MiB paste 128 MiB, far past what one X request can carry, and
+phist sends selections that large to other programs in increments. Leaving
 the full view clears the selection; a drag still in progress then ends
 without claiming PRIMARY.
 

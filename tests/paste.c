@@ -1687,7 +1687,6 @@ testdialog(int fd)
 	XEvent click = {0};
 	size_t limit;
 	int x, asked, i, n;
-	char *primary;
 
 	mincontrast = 0;
 	emojifont = NULL;
@@ -2096,6 +2095,7 @@ testdialog(int fd)
 		Property p = textproperty("bad", 3);
 
 		p.format = 16;
+		p.items = 1;
 		supply(p, 0);
 	}
 	assert(!strcmp(pastefail.text, "The selection owner sent invalid data"));
@@ -2401,34 +2401,14 @@ testdialog(int fd)
 	mouseat(ButtonPress, Button1, 3, 7);
 	mouseat(ButtonRelease, Button1, 6, 7);
 	assert(owned == 7 && !strcmp(xsel.primary, "line"));
-	/* What one request cannot carry, as phist serves a selection in one, is
-	 * not copied, with BIG-REQUESTS or without: 28 bytes of a request go
-	 * to its header and a big request's length, here 36 are left. */
-	for (i = 0; i < 2; i++) {
-		if (i)
-			bigrequests = 16;
-		else
-			bigrequests = 0, requestsize = 16;
-		clickat(3, 6); /* nothing selected: c copies all */
-		press(XK_c, 0);
-		assert(owned == 7 && paste.copied < 0);
-		assert(!strcmp(xsel.clipboard, "line 01"));
-		drawdialog();
-		assert(dialogrow("Too large to copy") == 17);
-		primary = xsel.primary;
-		drag(3, 3, 3, 4); /* 75 bytes */
-		assert(owned == 7 && paste.copied < 0 && xsel.primary == primary);
-		drag(3, 6, 9, 7);
-		assert(owned == 8 && !strcmp(xsel.primary, "line 00\nline 01"));
-		/* Exactly at the limit: 10 units take 12 bytes, not 13. */
-		*(i ? &bigrequests : &requestsize) = 10;
-		drag(3, 6, 6, 7);
-		assert(owned == 9 && !strcmp(xsel.primary, "line 00\nline"));
-		drag(3, 6, 7, 7);
-		assert(owned == 9 && paste.copied < 0);
-		assert(!strcmp(xsel.primary, "line 00\nline"));
-		owned = 7;
-	}
+	/* Text larger than one request is still copied: phist sends it to
+	 * requestors in increments. */
+	bigrequests = 16;
+	clickat(3, 6); /* nothing selected: c copies all */
+	press(XK_c, 0);
+	assert(owned == 8 && paste.copied && strlen(xsel.clipboard) == 441);
+	drag(3, 3, 3, 4); /* 75 bytes */
+	assert(owned == 9 && strspn(xsel.primary, "x") == 75);
 	bigrequests = 4194303, requestsize = 65535;
 	/* A label that does not fit is left out rather than cut short. */
 	resizewindow(18, 20);

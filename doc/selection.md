@@ -58,3 +58,51 @@ screen.
 Run `LC_ALL=C.UTF-8 sh tests/mouse.sh`. It verifies that tracking requests
 emit no mouse bytes, local selection/URL feedback/paste/scrolling still
 work, and all terminfo variants omit mouse capabilities.
+
+## Sending large selections
+
+PRIMARY and CLIPBOARD selections that fit in one X `ChangeProperty` request
+are sent directly. Larger selections use INCR: phist announces an incremental
+transfer, waits for the requestor to delete each property, sends the next
+chunk and ends with an empty chunk. This applies both to terminal/history
+selections and to copies from the paste's full view. There is no separate
+copy-size refusal.
+
+The maximum direct request is derived from `XExtendedMaxRequestSize()`, or
+`XMaxRequestSize()` without BIG-REQUESTS, in four-byte units. The
+calculation conservatively reserves 24 bytes for the request header and four
+for the extended length. Typical ceilings are about 16 MiB with BIG-REQUESTS
+and 256 KiB without it, but the server's reported limit is authoritative.
+Previously exceeding it could trigger an X error or disconnect phist. Escaping
+a paste can expand it fourfold, so even text within the paste limit can
+exceed this ceiling.
+
+Each active transfer owns a snapshot of the requested text; a later
+selection change cannot alter its remaining chunks. Several transfers may
+run concurrently, including to one window. Restarting a request for the same
+window/property replaces that transfer. A transfer with no progress for five
+seconds is dropped. This outgoing timeout is separate from the configurable
+incoming-paste timeout.
+
+As any client on the display can ask for transfers, and each owns a copy of the
+text, at most 16 can run at once, 4 of them to one window, holding 256 MiB
+together. A request beyond that is refused like any failed conversion, with a
+`None` property in its reply. A transfer starting while no other runs may be of
+any size, as long as there is memory for its copy. Selections sent directly
+are not limited, as phist keeps no copy.
+
+phist watches property changes on requestor windows and restores the event mask
+it previously selected once the last transfer to that window ends. Existing
+watches, including those on phist's own paste windows, survive. Requestors may
+disappear at any time: the X error handler ignores `BadWindow` for other
+clients' windows, and `BadDrawable` specifically for `GetGeometry` requests,
+which fail that way if the window goes during an attribute lookup. Other errors,
+including drawable errors from rendering and a bad window of phist's own such as
+a stale `-w` ID, go to Xlib's previous handler.
+
+Run `LC_ALL=C.UTF-8 sh tests/selsend.sh`. Checks cover BIG-REQUESTS and
+ordinary limits, direct requests at the boundary, chunked snapshots,
+unrelated property events, concurrent transfers to one window, existing
+event masks, restarts, timeouts, limits, vanished requestors and error
+handling.
+`tests/paste.sh` covers copying from the full view.

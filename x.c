@@ -13,6 +13,7 @@
 #include <libgen.h>
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
+#include <X11/Xproto.h>
 #include <X11/cursorfont.h>
 #include <X11/keysym.h>
 #include <X11/Xft/Xft.h>
@@ -205,6 +206,8 @@ static void brelease(XEvent *);
 static void bpress(XEvent *);
 static void bmotion(XEvent *);
 static void propnotify(XEvent *);
+static void xpropnotify(XEvent *);
+static double selsendremaining(struct timespec);
 static void selnotify(XEvent *);
 static void selclear_(XEvent *);
 static void selrequest(XEvent *);
@@ -238,7 +241,7 @@ static void (*handler[LASTEvent])(XEvent *) = {
  * PropertyNotify is only turned on when there is some INCR transfer happening
  * for the selection retrieval.
  */
-	[PropertyNotify] = propnotify,
+	[PropertyNotify] = xpropnotify,
 	[SelectionRequest] = selrequest,
 };
 
@@ -966,6 +969,183 @@ selclear_(XEvent *e)
 	selclear();
 }
 
+/*
+ * Selections too large for one request go to their requestors in
+ * increments (ICCCM 2.7.2): phist announces INCR, writes each chunk once the
+ * requestor deleted the one before, and ends with an empty one. The text is
+ * copied, as the selection may change meanwhile. A transfer making no
+ * progress for SELSEND_TIMEOUT ms is dropped. Any client can ask for any number
+ * of them from any number of windows, so their copies are limited in total.
+ */
+enum { SELSEND_TIMEOUT = 5000, SELSEND_MAX = 16, SELSEND_MAXPERWINDOW = 4 };
+#define SELSEND_MAXBYTES ((size_t)256 << 20)
+typedef struct SelSend {
+	Window requestor;
+	Atom property, target;
+	char *data;
+	size_t len, pos;
+	long mask; /* the requestor's events phist selected before */
+	struct timespec progress;
+	struct SelSend *next;
+} SelSend;
+static SelSend *selsends;
+static int (*xerrorprev)(Display *, XErrorEvent *);
+static Window embedparent; /* the window given by -w, if any */
+
+/* Requestors may vanish at any time, also during a transfer. One going
+ * between the two requests of XGetWindowAttributes fails only the second,
+ * GetGeometry, with BadDrawable; Xlib hides that if both fail. Other
+ * BadDrawable errors, e.g. from rendering phist's own window, and bad windows
+ * of its own, such as a stale -w ID, still belong to the previous handler. */
+static int
+xerror(Display *dpy, XErrorEvent *e)
+{
+	int own = e->resourceid == xw.win ||
+	          (embedparent && e->resourceid == embedparent);
+
+	if ((e->error_code == BadWindow && !own) ||
+	    (e->error_code == BadDrawable && e->request_code == X_GetGeometry))
+		return 0;
+	return xerrorprev(dpy, e);
+}
+
+/* The most text one ChangeProperty request carries: its 24 bytes and a big
+ * request's 4-byte length are reserved, and text is padded to units. */
+static size_t
+selmaxbytes(void)
+{
+	long units = XExtendedMaxRequestSize(xw.dpy);
+
+	if (!units)
+		units = XMaxRequestSize(xw.dpy);
+	return (size_t)units * 4 - 28;
+}
+
+/* Stop a transfer, restoring the requestor's events once phist has no other
+ * transfer to it. */
+static void
+selsendend(SelSend *s)
+{
+	SelSend **p, *o;
+
+	for (p = &selsends; *p != s; p = &(*p)->next)
+		;
+	*p = s->next;
+	for (o = selsends; o && o->requestor != s->requestor; o = o->next)
+		;
+	if (!o)
+		XSelectInput(xw.dpy, s->requestor, s->mask);
+	free(s->data);
+	free(s);
+}
+
+/* Whether another transfer of len bytes may start. Without others, any can. */
+static int
+selsendfits(Window requestor, size_t len)
+{
+	SelSend *s;
+	size_t bytes = 0;
+	int all = 0, window = 0;
+
+	for (s = selsends; s; s = s->next) {
+		all++;
+		window += s->requestor == requestor;
+		bytes += s->len;
+	}
+	return all < SELSEND_MAX && window < SELSEND_MAXPERWINDOW &&
+	       (!all || (bytes <= SELSEND_MAXBYTES && len <= SELSEND_MAXBYTES - bytes));
+}
+
+/* Announce an incremental transfer; return 0 if it is refused or the requestor
+ * is gone. */
+static int
+selsendstart(XSelectionRequestEvent *xsre, const char *text, size_t textlen)
+{
+	XWindowAttributes wa;
+	SelSend *s, *o;
+	char *data;
+	long len;
+
+	if (!selsendfits(xsre->requestor, textlen))
+		return 0;
+	for (o = selsends; o && o->requestor != xsre->requestor; o = o->next)
+		;
+	if (!o && !XGetWindowAttributes(xw.dpy, xsre->requestor, &wa))
+		return 0;
+	/* Any client can ask, which must not end the terminal for lack of memory. */
+	if (!(data = malloc(textlen + 1)))
+		return 0;
+	memcpy(data, text, textlen + 1);
+	s = xmalloc(sizeof(*s));
+	s->requestor = xsre->requestor;
+	s->property = xsre->property;
+	s->target = xsre->target;
+	s->len = textlen;
+	s->data = data;
+	s->pos = 0;
+	s->mask = o ? o->mask : wa.your_event_mask;
+	clock_gettime(CLOCK_MONOTONIC, &s->progress);
+	s->next = selsends;
+	selsends = s;
+	/* Watch for deletions before the requestor can see the property. */
+	XSelectInput(xw.dpy, s->requestor, s->mask | PropertyChangeMask);
+	len = s->len;
+	XChangeProperty(xw.dpy, s->requestor, s->property,
+	                XInternAtom(xw.dpy, "INCR", 0), 32, PropModeReplace,
+	                (uchar *)&len, 1);
+	return 1;
+}
+
+/* Write the next chunk after the requestor deleted the last one, or the
+ * empty one ending the transfer. */
+static void
+selsendnext(XEvent *e)
+{
+	SelSend *s;
+	size_t n;
+
+	for (s = selsends; s; s = s->next)
+		if (s->requestor == e->xproperty.window &&
+		    s->property == e->xproperty.atom)
+			break;
+	if (!s)
+		return;
+	n = MIN(s->len - s->pos, selmaxbytes());
+	XChangeProperty(xw.dpy, s->requestor, s->property, s->target, 8,
+	                PropModeReplace, (uchar *)s->data + s->pos, n);
+	s->pos += n;
+	clock_gettime(CLOCK_MONOTONIC, &s->progress);
+	if (!n)
+		selsendend(s);
+}
+
+void
+xpropnotify(XEvent *e)
+{
+	if (e->xproperty.state == PropertyDelete)
+		selsendnext(e);
+	propnotify(e);
+}
+
+/* Drop transfers making no progress; return the ms until the next might
+ * time out, or -1 if there is none. */
+double
+selsendremaining(struct timespec now)
+{
+	SelSend *s, *next;
+	double remaining, soonest = -1;
+
+	for (s = selsends; s; s = next) {
+		next = s->next;
+		remaining = SELSEND_TIMEOUT - TIMEDIFF(now, s->progress);
+		if (remaining <= 0)
+			selsendend(s);
+		else if (soonest < 0 || remaining < soonest)
+			soonest = remaining;
+	}
+	return soonest;
+}
+
 void
 selrequest(XEvent *e)
 {
@@ -973,6 +1153,8 @@ selrequest(XEvent *e)
 	XSelectionEvent xev;
 	Atom xa_targets, string, clipboard;
 	char *seltext;
+	size_t seltextlen;
+	SelSend *s;
 
 	xsre = (XSelectionRequestEvent *) e;
 	xev.type = SelectionNotify;
@@ -982,6 +1164,16 @@ selrequest(XEvent *e)
 	xev.time = xsre->time;
 	if (xsre->property == None)
 		xsre->property = xsre->target;
+
+	/* Every conversion replaces a transfer on this property, including a
+	 * direct response, TARGETS or a refusal. Never send its stale chunks. */
+	for (s = selsends; s; s = s->next) {
+		if (s->requestor == xsre->requestor &&
+		    s->property == xsre->property) {
+			selsendend(s);
+			break;
+		}
+	}
 
 	/* reject */
 	xev.property = None;
@@ -1010,11 +1202,15 @@ selrequest(XEvent *e)
 				xsre->selection);
 			return;
 		}
-		if (seltext != NULL) {
+		seltextlen = seltext ? strlen(seltext) : 0;
+		if (seltext != NULL && seltextlen > selmaxbytes()) {
+			if (selsendstart(xsre, seltext, seltextlen))
+				xev.property = xsre->property;
+		} else if (seltext != NULL) {
 			XChangeProperty(xsre->display, xsre->requestor,
 					xsre->property, xsre->target,
 					8, PropModeReplace,
-					(uchar *)seltext, strlen(seltext));
+					(uchar *)seltext, seltextlen);
 			xev.property = xsre->property;
 		}
 	}
@@ -1645,6 +1841,7 @@ xinit(int cols, int rows)
 
 	if (!(xw.dpy = XOpenDisplay(NULL)))
 		die("can't open display\n");
+	xerrorprev = XSetErrorHandler(xerror);
 	xw.scr = XDefaultScreen(xw.dpy);
 	xw.vis = XDefaultVisual(xw.dpy, xw.scr);
 
@@ -1683,8 +1880,10 @@ xinit(int cols, int rows)
 			win.w, win.h, 0, XDefaultDepth(xw.dpy, xw.scr), InputOutput,
 			xw.vis, CWBackPixel | CWBorderPixel | CWBitGravity
 			| CWEventMask | CWColormap, &xw.attrs);
-	if (parent != root)
+	if (parent != root) {
+		embedparent = parent;
 		XReparentWindow(xw.dpy, xw.win, parent, xw.l, xw.t);
+	}
 
 	memset(&gcvalues, 0, sizeof(gcvalues));
 	gcvalues.graphics_exposures = False;
@@ -3310,7 +3509,7 @@ run(void)
 	fd_set rfd, wfd;
 	int xfd = XConnectionNumber(xw.dpy), ttyfd, xev, drawing;
 	struct timespec seltv, *tv, now, trigger;
-	double timeout, urlremain, bellremain, pasteremain;
+	double timeout, urlremain, bellremain, pasteremain, sendremain;
 
 	/* Waiting for window mapping */
 	do {
@@ -3337,6 +3536,9 @@ run(void)
 		pasteremain = pasteremaining(now);
 		if (pasteremain >= 0 && (timeout < 0 || pasteremain < timeout))
 			timeout = pasteremain;
+		sendremain = selsendremaining(now);
+		if (sendremain >= 0 && (timeout < 0 || sendremain < timeout))
+			timeout = sendremain;
 		FD_ZERO(&rfd);
 		FD_ZERO(&wfd);
 		FD_SET(ttyfd, &rfd);
@@ -3359,6 +3561,7 @@ run(void)
 		}
 		clock_gettime(CLOCK_MONOTONIC, &now);
 		pasteremaining(now);
+		selsendremaining(now);
 
 		if (FD_ISSET(ttyfd, &wfd))
 			ttyflushwrites();

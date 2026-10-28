@@ -18,8 +18,8 @@ phist is an X11 terminal emulator forked from [st](https://st.suckless.org/).
   underlines](doc/appearance.md#underlines).
 - [Clickable URLs with copy feedback](doc/urls.md), including wrapped text and
   history.
-- [Expanding multi-click selections](doc/selection.md) for words, paths and
-  logical lines.
+- [Expanding text selections](doc/selection.md) and [incremental transfers for
+  large copies](doc/selection.md#sending-large-selections).
 - [Local mouse actions](doc/selection.md#local-mouse-actions) with application
   mouse and [focus reporting](doc/terminal-behavior.md#focus-reporting)
   disabled.

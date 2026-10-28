@@ -55,7 +55,7 @@ static struct {
 	 * A position past the row's text has an empty range at its end. */
 	int marking, marked;
 	size_t markanchor[2], markpoint[2];
-	int copied; /* the full view's text was just copied, or -1 if too large */
+	int copied; /* the full view's text was just copied */
 	int asking; /* whether to paste unmodified, after choosing k */
 	int askyes; /* Yes rather than No is selected in the question */
 	size_t viewtop; /* offset of the first row in the full view */
@@ -827,24 +827,13 @@ pastemarkrange(size_t *lo, size_t *hi)
 	return paste.marked && *lo < *hi;
 }
 
-/* The text from lo to hi for copying: escaped, but with its newlines.
- * Return NULL if it is too large: phist serves a selection in one request,
- * and the server would refuse a larger one or disconnect phist. */
+/* The text from lo to hi for copying: escaped, but with its newlines. */
 static char *
 pastemarktext(size_t lo, size_t hi)
 {
-	long units = XExtendedMaxRequestSize(xw.dpy);
 	char *text = xmalloc((hi - lo) * 5 + 1);
 
-	if (!units)
-		units = XMaxRequestSize(xw.dpy);
 	pastetext(lo, hi, text, 1);
-	/* Leave room for the ChangeProperty request's 24 bytes and the
-	 * 4 bytes of a big request's length; the text is padded to units. */
-	if (strlen(text) > (size_t)units * 4 - 28) {
-		free(text);
-		return NULL;
-	}
 	return text;
 }
 
@@ -900,7 +889,6 @@ static int
 pastemouse(XEvent *e)
 {
 	size_t lo, hi;
-	char *text;
 
 	if (paste.state != PASTE_CONFIRM || !paste.viewing)
 		return 0;
@@ -926,12 +914,8 @@ pastemouse(XEvent *e)
 	pastemarkto(e, 0);
 	paste.marking = 0;
 	if (pastemarkrange(&lo, &hi)) {
-		if ((text = pastemarktext(lo, hi))) {
-			selclear();
-			setsel(text, e->xbutton.time);
-		} else {
-			paste.copied = -1;
-		}
+		selclear();
+		setsel(pastemarktext(lo, hi), e->xbutton.time);
 	}
 	return 1;
 }
@@ -941,18 +925,13 @@ static void
 pastecopy(void)
 {
 	size_t lo, hi;
-	char *text;
 
 	if (!pastemarkrange(&lo, &hi)) {
 		lo = 0;
 		hi = paste.len;
 	}
-	if (!(text = pastemarktext(lo, hi))) {
-		paste.copied = -1;
-		return;
-	}
 	free(xsel.clipboard);
-	xsel.clipboard = text;
+	xsel.clipboard = pastemarktext(lo, hi);
 	XSetSelectionOwner(xw.dpy, XInternAtom(xw.dpy, "CLIPBOARD", 0), xw.win,
 	                   CurrentTime);
 	paste.copied = 1;
@@ -1507,8 +1486,7 @@ pastedrawview(int cols, int rows, Color *fg, Color *bg)
 			pastedrawkey(&pastewhite, left + 1, 1, y, 0);
 			pastedrawline("C", left + 1, y, 1, fg);
 		}
-		label = paste.copied > 0 ? "Copied to clipboard" :
-		        paste.copied < 0 ? "Too large to copy" :
+		label = paste.copied ? "Copied to clipboard" :
 		        pastemarkrange(&lo, &hi) ? "Copy selection" : "Copy all";
 		if (pastewidth(label) <= inner - n - 6)
 			pastedrawline(label, left + 5, y, inner - n - 6, fg);
