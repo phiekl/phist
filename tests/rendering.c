@@ -14,6 +14,8 @@ static Color glyphcolor, backgroundcolor;
 
 Line testrender_text(int, const char *);
 void testrender_marks(void);
+void testrender_clean(void);
+int testrender_alldirty(void);
 
 FT_UInt XftCharIndex(Display *d, XftFont *f, FcChar32 c) { return 1; }
 
@@ -343,6 +345,107 @@ testconcealedurl(void)
 	puts("PASS: concealed URLs flash and restore, including reverse-video URLs");
 }
 
+/* Colors made for one run are freed with it, and a failure leaves the palette. */
+static void
+testtempcolors(void)
+{
+	Glyph base = { .u = 'x', .fg = TRUECOLOR(90, 0, 0), .bg = TRUECOLOR(0, 90, 0),
+	               .ucolor = UCOLOR_DEFAULT };
+	XftGlyphFontSpec spec = {0};
+	int i, before;
+
+	setcolor(&dc.col[defaultfg], 0xffffff);
+	setcolor(&dc.col[defaultbg], 0x000000);
+	setcolor(&dc.col[1], 0x00ff00);
+	setcolor(&dc.col[15], 0xfefefe);
+
+	failalloc = 1;
+	assert(xvisibilitycolor(VISIBLE_WHITE) == &dc.col[15]);
+	assert(xvisibilitycolor(VISIBLE_RED) == &dc.col[1]);
+	assert(xvisibilitycolor(VISIBLE_BLACK) == &dc.col[0]);
+	failalloc = 0;
+	for (i = 0; i < 3; i++)
+		assert(xvisibilitycolor(i) != &dc.col[((int[]){ 0, 15, 1 })[i]]);
+
+	/* Dialog and bar colors keep light on dark, and are not stuck on failure. */
+	failalloc = 1;
+	assert(rgbcolor(0xfff0a0) == &dc.col[15] && rgbcolor(0x202040) == &dc.col[0]);
+	assert(pastecolor(PASTE_WHITE) == &dc.col[15] && pastecolor(PASTE_BLACK) == &dc.col[0]);
+	failalloc = 0;
+	assert(rgbcolor(0xfff0a0) != &dc.col[15] && rgbcolor(0xfff0a0)->pixel == 0xfff0a0);
+	assert(pastecolor(PASTE_WHITE) != &dc.col[15]);
+
+	for (i = 0; i < 4; i++) {
+		allocations = frees = 0;
+		win.mode = i & 1 ? MODE_REVERSE : 0;
+		base.mode = i & 2 ? ATTR_FAINT : 0;
+		xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+		assert(allocations == 2 + (i & 1 ? 2 : 0) + (i & 2 ? 1 : 0));
+		assert(frees == allocations);
+	}
+
+	/* Nothing to free after failing, and nothing drawn in a stale color. */
+	failalloc = 1;
+	allocations = frees = 0;
+	win.mode = 0;
+	base.mode = 0;
+	glyphcolor.pixel = backgroundcolor.pixel = 0x123456;
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(glyphcolor.pixel == 0xffffff && backgroundcolor.pixel == 0);
+	/* Reversing palette colors falls back to the reversed defaults. */
+	base.fg = 1;
+	base.bg = 2;
+	setcolor(&dc.col[2], 0x0000ff);
+	win.mode = MODE_REVERSE;
+	glyphcolor.pixel = backgroundcolor.pixel = 0x123456;
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(backgroundcolor.pixel == 0xffffff);
+	assert(glyphcolor.pixel == 0);
+	/* Faint text that cannot be dimmed stays as it was. */
+	win.mode = 0;
+	base.bg = defaultbg;
+	base.mode = ATTR_FAINT;
+	glyphcolor.pixel = 0x123456;
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(glyphcolor.pixel == 0x00ff00);
+	assert(!frees);
+	failalloc = 0;
+	win.mode = 0;
+	allocations = frees = 0;
+
+	/* With a colormap, colors outlive the run, whose text still uses their cells. */
+	xw.colormapped = 1;
+	base.mode = 0;
+	base.fg = TRUECOLOR(255, 0, 0);
+	base.bg = defaultbg;
+	for (i = 0; i < 3; i++)
+		xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(allocations == 1 && !frees && glyphcolor.pixel == 0xfe0000);
+	/* Without room, a palette color until everything is drawn again. */
+	win.mode = MODE_VISIBLE;
+	assert(xstartdraw() && !frees);
+	for (i = 1; i <= LEN(keptcolors); i++) {
+		base.fg = TRUECOLOR(255, i / 256, i % 256);
+		xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	}
+	assert(nkeptcolors == LEN(keptcolors) && keptcolorsfull && !frees);
+	assert(glyphcolor.pixel == dc.col[defaultfg].pixel);
+	testrender_clean();
+	assert(xstartdraw() && frees == LEN(keptcolors) && !nkeptcolors && !keptcolorsfull);
+	assert(testrender_alldirty());
+	testrender_clean();
+	assert(xstartdraw() && frees == LEN(keptcolors) && !testrender_alldirty());
+	/* Failing with nothing to free is not worth drawing everything again. */
+	failalloc = 1;
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(!keptcolorsfull);
+	failalloc = 0;
+	xw.colormapped = 0;
+	win.mode = 0;
+	allocations = frees = 0;
+	puts("PASS: colors made for a run are freed, and failures use the palette");
+}
+
 int
 main(void)
 {
@@ -361,6 +464,9 @@ main(void)
 	win.cw = 8;
 	win.ch = 16;
 	tnew(20, 4);
+	testtempcolors();
+	setcolor(&colors[1], 0xabcdef);
+	setcolor(&colors[2], 0x654321);
 	for (i = 1; i <= 5; i++) {
 		base.mode = ATTR_UNDERLINE | (i << 13);
 		xdrawglyphfontspecs(&spec, base, 1, 1, 1);

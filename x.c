@@ -133,6 +133,7 @@ typedef struct {
 	Visual *vis;
 	XSetWindowAttributes attrs;
 	int scr;
+	int colormapped; /* does a color's cell stay in use by what was drawn in it? */
 	int isfixed; /* is fixed geometry? */
 	int l, t; /* left and top offset */
 	int gm; /* geometry mask */
@@ -2251,6 +2252,7 @@ xinit(int cols, int rows)
 	xerrorprev = XSetErrorHandler(xerror);
 	xw.scr = XDefaultScreen(xw.dpy);
 	xw.vis = XDefaultVisual(xw.dpy, xw.scr);
+	xw.colormapped = xw.vis->class != TrueColor;
 
 	/* font */
 	if (!FcInit())
@@ -2669,13 +2671,67 @@ xvisibleforeground(Color *fg, Color *bg)
 	                        VISIBLE_BLACK : VISIBLE_WHITE);
 }
 
+/*
+ * On a visual with a colormap, text keeps using a color's cell after it is drawn,
+ * and another color in a freed cell would change that text. So colors are kept
+ * until there is no room for more. xstartdraw() then frees them and has the whole
+ * screen drawn again, in what it needs now.
+ */
+static struct {
+	XRenderColor value;
+	Color color;
+} keptcolors[128];
+static int nkeptcolors, keptcolorsfull;
+
+static Color *
+xkeptcolor(const XRenderColor *value, Color *fallback)
+{
+	int i;
+
+	for (i = 0; i < nkeptcolors; i++)
+		if (!memcmp(&keptcolors[i].value, value, sizeof(*value)))
+			return &keptcolors[i].color;
+	if (nkeptcolors == LEN(keptcolors) ||
+	    !XftColorAllocValue(xw.dpy, xw.vis, xw.cmap, value, &keptcolors[nkeptcolors].color)) {
+		keptcolorsfull = nkeptcolors > 0;
+		return fallback;
+	}
+	keptcolors[nkeptcolors].value = *value;
+	return &keptcolors[nkeptcolors++].color;
+}
+
+static void
+xreleasekeptcolors(void)
+{
+	if (!keptcolorsfull)
+		return;
+	while (nkeptcolors > 0)
+		XftColorFree(xw.dpy, xw.vis, xw.cmap, &keptcolors[--nkeptcolors].color);
+	keptcolorsfull = 0;
+	tfulldirt();
+}
+
+/* Allocate a color for one run into temps; the caller frees it after drawing.
+ * Visuals with a colormap can run out of cells, leaving a palette color. */
+static Color *
+xtempcolor(const XRenderColor *value, Color *temps, int *ntemps, Color *fallback)
+{
+	if (xw.colormapped)
+		return xkeptcolor(value, fallback);
+	if (!XftColorAllocValue(xw.dpy, xw.vis, xw.cmap, value, &temps[*ntemps]))
+		return fallback;
+	return &temps[(*ntemps)++];
+}
+
 void
 xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, int y)
 {
 	int charlen = len * ((base.mode & ATTR_WIDE) && win.tw > win.cw ? 2 : 1);
 	int winx = borderpx + x * win.cw, winy = borderpx + y * win.ch,
 	    width = charlen * win.cw;
-	Color *fg, *bg, *temp, revfg, revbg, truefg, truebg;
+	/* Up to true fg and bg, their reversals and faint fg, all freed below. */
+	Color *fg, *bg, *temp, temps[5];
+	int ntemps = 0;
 	XRenderColor colfg, colbg;
 	XRectangle r;
 	int ustyle = USTYLE(base);
@@ -2697,8 +2753,7 @@ xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, i
 		colfg.red = TRUERED(base.fg);
 		colfg.green = TRUEGREEN(base.fg);
 		colfg.blue = TRUEBLUE(base.fg);
-		XftColorAllocValue(xw.dpy, xw.vis, xw.cmap, &colfg, &truefg);
-		fg = &truefg;
+		fg = xtempcolor(&colfg, temps, &ntemps, &dc.col[defaultfg]);
 	} else {
 		fg = &dc.col[base.fg];
 	}
@@ -2708,8 +2763,7 @@ xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, i
 		colbg.green = TRUEGREEN(base.bg);
 		colbg.red = TRUERED(base.bg);
 		colbg.blue = TRUEBLUE(base.bg);
-		XftColorAllocValue(xw.dpy, xw.vis, xw.cmap, &colbg, &truebg);
-		bg = &truebg;
+		bg = xtempcolor(&colbg, temps, &ntemps, &dc.col[defaultbg]);
 	} else {
 		bg = &dc.col[base.bg];
 	}
@@ -2726,9 +2780,7 @@ xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, i
 			colfg.green = ~fg->color.green;
 			colfg.blue = ~fg->color.blue;
 			colfg.alpha = fg->color.alpha;
-			XftColorAllocValue(xw.dpy, xw.vis, xw.cmap, &colfg,
-					&revfg);
-			fg = &revfg;
+			fg = xtempcolor(&colfg, temps, &ntemps, &dc.col[defaultbg]);
 		}
 
 		if (bg == &dc.col[defaultbg]) {
@@ -2738,9 +2790,7 @@ xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, i
 			colbg.green = ~bg->color.green;
 			colbg.blue = ~bg->color.blue;
 			colbg.alpha = bg->color.alpha;
-			XftColorAllocValue(xw.dpy, xw.vis, xw.cmap, &colbg,
-					&revbg);
-			bg = &revbg;
+			bg = xtempcolor(&colbg, temps, &ntemps, &dc.col[defaultfg]);
 		}
 	}
 
@@ -2749,8 +2799,7 @@ xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, i
 		colfg.green = fg->color.green / 2;
 		colfg.blue = fg->color.blue / 2;
 		colfg.alpha = fg->color.alpha;
-		XftColorAllocValue(xw.dpy, xw.vis, xw.cmap, &colfg, &revfg);
-		fg = &revfg;
+		fg = xtempcolor(&colfg, temps, &ntemps, fg);
 	}
 
 	if (base.mode & ATTR_REVERSE) {
@@ -3148,6 +3197,9 @@ xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, i
 
 	/* Reset clip to none. */
 	XftDrawSetClip(xw.draw, 0);
+
+	while (ntemps > 0)
+		XftColorFree(xw.dpy, xw.vis, xw.cmap, &temps[--ntemps]);
 }
 
 void
@@ -3619,7 +3671,10 @@ vbellnextframe(struct timespec now)
 int
 xstartdraw(void)
 {
-	return IS_SET(MODE_VISIBLE);
+	if (!IS_SET(MODE_VISIBLE))
+		return 0;
+	xreleasekeptcolors();
+	return 1;
 }
 
 void

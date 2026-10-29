@@ -7,6 +7,23 @@ testrender_marks(void)
 	searchmarks();
 }
 
+void
+testrender_clean(void)
+{
+	memset(term.dirty, 0, term.row * sizeof(*term.dirty));
+}
+
+int
+testrender_alldirty(void)
+{
+	int y;
+
+	for (y = 0; y < term.row; y++)
+		if (!term.dirty[y])
+			return 0;
+	return 1;
+}
+
 Line
 testrender_text(int cols, const char *text)
 {
