@@ -1,4 +1,42 @@
 #include <assert.h>
+#include <stddef.h>
+#include <fontconfig/fontconfig.h>
+
+/* Fail the Fontconfig calls of the fallback search on demand. */
+static int failfc;
+enum { FAIL_DUPLICATE = 1, FAIL_CHARSET, FAIL_ADDCHAR, FAIL_SORT, FAIL_MATCH };
+
+static FcPattern *
+testduplicate(const FcPattern *p)
+{
+	return failfc == FAIL_DUPLICATE ? NULL : FcPatternDuplicate(p);
+}
+static FcCharSet *
+testcharset(void)
+{
+	return failfc == FAIL_CHARSET ? NULL : FcCharSetCreate();
+}
+static FcBool
+testaddchar(FcCharSet *c, FcChar32 r)
+{
+	return failfc == FAIL_ADDCHAR ? FcFalse : FcCharSetAddChar(c, r);
+}
+static FcFontSet *
+testsort(FcConfig *c, FcPattern *p, FcBool trim, FcCharSet **cs, FcResult *r)
+{
+	return failfc == FAIL_SORT ? NULL : FcFontSort(c, p, trim, cs, r);
+}
+static FcPattern *
+testmatch(FcConfig *c, FcFontSet **s, int n, FcPattern *p, FcResult *r)
+{
+	return failfc == FAIL_MATCH ? NULL : FcFontSetMatch(c, s, n, p, r);
+}
+#define FcPatternDuplicate testduplicate
+#define FcCharSetCreate testcharset
+#define FcCharSetAddChar testaddchar
+#define FcFontSort testsort
+#define FcFontSetMatch testmatch
+
 #define VERSION "test"
 #define main st_main
 #include "../x.c"
@@ -72,6 +110,8 @@ XftFontClose(Display *d, XftFont *font)
 FT_UInt
 XftCharIndex(Display *d, XftFont *font, FcChar32 rune)
 {
+	if (rune == 0xFFFD && istextfont(font))
+		return 5;
 	if (rune >= UNCOVERED)
 		return 0;
 	if (rune >= FALLBACKONLY)
@@ -340,9 +380,42 @@ main(void)
 		assert(frclen == 1);
 	}
 
+	/* A fallback that cannot be loaded leaves U+FFFD and nothing behind. */
+	setup();
+	frclen = 0;
+	dc.font.set = FcFontSetCreate();
+	FcFontSetAdd(dc.font.set, FcNameParse((const FcChar8 *)"Fallback:pixelsize=13"));
+	before = livefonts;
+	for (i = FAIL_DUPLICATE; i <= FAIL_MATCH; i++) {
+		FcFontSet *set = dc.font.set;
+
+		failfc = i;
+		if (i == FAIL_SORT)
+			dc.font.set = NULL;
+		s = spec(UNCOVERED, 0);
+		assert(s.font == &textfonts[0] && s.glyph == 5);
+		assert(!frclen && livefonts == before);
+		if (i == FAIL_SORT)
+			dc.font.set = set;
+	}
+	failfc = 0;
+	failopen = 1;
+	s = spec(UNCOVERED, 0);
+	assert(s.font == &textfonts[0] && s.glyph == 5 && !frclen);
+	/* The next glyph of the run stays aligned, and it recovers later. */
+	{
+		Glyph row[] = { {.u = UNCOVERED}, {.u = 'x'} };
+
+		assert(xmakeglyphfontspecs(specs, row, LEN(row), 0, 0) == LEN(row));
+		assert(specs[0].x == 0 && specs[1].x == win.cw);
+	}
+	failopen = 0;
+	s = spec(UNCOVERED, 0);
+	assert(s.font == &textfonts[0] && !s.glyph && !frclen && !failopen);
+
 	xunloadfonts();
 	assert(!livefonts);
 	free(frc);
-	puts("PASS: emoji font priority, presentation selection, primary/fallback preservation, styles, cell fitting, alignment, optional fonts, zoom cache cleanup and the fallback cache limit");
+	puts("PASS: emoji font priority, presentation selection, primary/fallback preservation, styles, cell fitting, alignment, optional fonts, zoom cache cleanup, the fallback cache limit and fallback failures");
 	return 0;
 }

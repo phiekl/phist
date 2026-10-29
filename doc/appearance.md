@@ -126,8 +126,13 @@ drawn as the primary font's missing glyph and tracked in a separate
 16,384-slot table. These characters do not fill the font cache; repeated
 lookups avoid a font search unless another character replaces their slot.
 
+A fallback that cannot be loaded, for lack of memory or a damaged font file,
+does not end the terminal. The character is drawn as U+FFFD from the primary
+font, or as its missing glyph, and loading is tried again the next time it is
+drawn.
+
 `LC_ALL=C.UTF-8 sh tests/emoji.sh` checks the limit with a flood of uncovered
-characters.
+characters and the replacement after each kind of failure.
 
 ## Visual bell
 

@@ -2358,6 +2358,61 @@ xinit(int cols, int rows)
 		xsel.xtarget = XA_STRING;
 }
 
+/* Cache a fallback font for rune. Return its index, -1 on loading failure,
+ * or FRC_UNCOVERED if the best match lacks the character. */
+static int
+xaddfallback(Font *font, int frcflags, Rune rune)
+{
+	FcPattern *fcpattern = NULL, *fontpattern = NULL;
+	FcCharSet *fccharset = NULL;
+	FcFontSet *fcsets[1];
+	FcResult fcres;
+	FcBool color;
+	XftFont *opened = NULL;
+	int iscolor = 0, f = -1;
+
+	if (!font->set)
+		font->set = FcFontSort(0, font->pattern, 1, 0, &fcres);
+	fcsets[0] = font->set;
+	if (font->set && (fcpattern = FcPatternDuplicate(font->pattern)) &&
+	    (fccharset = FcCharSetCreate()) &&
+	    FcCharSetAddChar(fccharset, rune) &&
+	    FcPatternAddCharSet(fcpattern, FC_CHARSET, fccharset) &&
+	    FcPatternAddBool(fcpattern, FC_SCALABLE, 1) &&
+	    FcConfigSubstitute(0, fcpattern, FcMatchPattern)) {
+		FcDefaultSubstitute(fcpattern);
+		fontpattern = xfallbackmatch(font, fcsets, fcpattern, rune,
+		                             frcflags & FRC_TEXT);
+	}
+	if (fontpattern) {
+		iscolor = FcPatternGetBool(fontpattern, FC_COLOR, 0, &color) ==
+		          FcResultMatch && color;
+		/* The font owns the pattern once opened. */
+		if (!(opened = XftFontOpenPattern(xw.dpy, fontpattern)))
+			FcPatternDestroy(fontpattern);
+	}
+	if (opened && !XftCharIndex(xw.dpy, opened, rune)) {
+		XftFontClose(xw.dpy, opened);
+		*xuncoveredslot(xuncoveredkey(frcflags, rune)) = xuncoveredkey(frcflags, rune);
+		f = FRC_UNCOVERED;
+	} else if (opened) {
+		if (frclen >= frccap) {
+			frccap += 16;
+			frc = xrealloc(frc, frccap * sizeof(Fontcache));
+		}
+		frc[frclen].color = iscolor;
+		frc[frclen].font = opened;
+		frc[frclen].flags = frcflags;
+		frc[frclen].unicodep = rune;
+		f = frclen++;
+	}
+	if (fccharset)
+		FcCharSetDestroy(fccharset);
+	if (fcpattern)
+		FcPatternDestroy(fcpattern);
+	return f;
+}
+
 /* Convert a coordinate for a glyph spec; casting one out of range is undefined. */
 static short
 xshort(float v)
@@ -2376,11 +2431,6 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 	float runewidth = win.cw;
 	Rune rune;
 	FT_UInt glyphidx;
-	FcResult fcres;
-	FcPattern *fcpattern, *fontpattern;
-	FcFontSet *fcsets[] = { NULL };
-	FcCharSet *fccharset;
-	FcBool color;
 	int i, f, numspecs = 0;
 
 	/* Specs refer to cached fonts until drawn, so only start over between runs. */
@@ -2466,68 +2516,15 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 
 		/* Nothing was found. Use fontconfig to find matching font. */
 		if (f >= frclen) {
-			if (!font->set)
-				font->set = FcFontSort(0, font->pattern,
-				                       1, 0, &fcres);
-			fcsets[0] = font->set;
-
-			/*
-			 * Nothing was found in the cache. Now use
-			 * some dozen of Fontconfig calls to get the
-			 * font for one single character.
-			 *
-			 * Xft and fontconfig are design failures.
-			 */
-			fcpattern = FcPatternDuplicate(font->pattern);
-			fccharset = FcCharSetCreate();
-
-			FcCharSetAddChar(fccharset, rune);
-			FcPatternAddCharSet(fcpattern, FC_CHARSET,
-					fccharset);
-			FcPatternAddBool(fcpattern, FC_SCALABLE, 1);
-
-			FcConfigSubstitute(0, fcpattern,
-					FcMatchPattern);
-			FcDefaultSubstitute(fcpattern);
-
-			fontpattern = xfallbackmatch(font, fcsets, fcpattern, rune,
-			                             frcflags & FRC_TEXT);
-
-			/* Allocate memory for the new cache entry. */
-			if (frclen >= frccap) {
-				frccap += 16;
-				frc = xrealloc(frc, frccap * sizeof(Fontcache));
-			}
-
-			frc[frclen].color = fontpattern &&
-				FcPatternGetBool(fontpattern, FC_COLOR, 0, &color) ==
-				FcResultMatch && color;
-			frc[frclen].font = XftFontOpenPattern(xw.dpy,
-					fontpattern);
-			if (!frc[frclen].font)
-				die("XftFontOpenPattern failed seeking fallback font: %s\n",
-					strerror(errno));
-			frc[frclen].flags = frcflags;
-			frc[frclen].unicodep = rune;
-
-			glyphidx = XftCharIndex(xw.dpy, frc[frclen].font, rune);
-
-			if (glyphidx) {
-				f = frclen;
-				frclen++;
-			} else {
-				XftFontClose(xw.dpy, frc[frclen].font);
-				*xuncoveredslot(xuncoveredkey(frcflags, rune)) =
-					xuncoveredkey(frcflags, rune);
-				f = FRC_UNCOVERED;
-			}
-
-			FcPatternDestroy(fcpattern);
-			FcCharSetDestroy(fccharset);
+			f = xaddfallback(font, frcflags, rune);
+			if (f >= 0)
+				glyphidx = XftCharIndex(xw.dpy, frc[f].font, rune);
 		}
-		if (f == FRC_UNCOVERED) {
+		if (f < 0) {
+			/* The missing glyph, or a replacement if the fallback failed to load. */
 			specs[numspecs].font = font->match;
-			specs[numspecs].glyph = 0;
+			specs[numspecs].glyph = f == FRC_UNCOVERED ? 0 :
+			                        XftCharIndex(xw.dpy, font->match, 0xFFFD);
 			specs[numspecs].x = (short)xp;
 			specs[numspecs].y = (short)yp;
 			xp += runewidth;
