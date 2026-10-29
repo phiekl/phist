@@ -63,6 +63,15 @@ launching directory: phist opens those before changing directory. In shell
 mode, the child changes directory before execution; in line mode, phist changes
 directory after opening the files and before invoking `stty`.
 
+## Serial lines
+
+With `-l line`, phist configures the line with `stty`, which runs without a
+shell. `stty_args` is split at blanks, with no quoting or expansion.
+Arguments after `-l line` are passed unchanged as individual arguments, and
+long argument lists are not truncated. An inherited `SIG_IGN` for `SIGCHLD`
+is reset so phist can collect the exit status of `stty`. Run
+`LC_ALL=C.UTF-8 sh tests/stty.sh`.
+
 ## Dependencies
 
 Building requires a C compiler and development files for Xlib, Xft, XRender,

@@ -31,6 +31,7 @@ static char *shell = "/usr/bin/bash";
 char *utmp = NULL;
 /* scroll program: to enable use a string like "scroll" */
 char *scroll = NULL;
+/* run for -l without a shell: split at blanks, with no quoting or expansion */
 char *stty_args = "stty raw pass8 nl -echo -iexten -cstopb 38400";
 
 /* identification sequence returned in DA and DECID */

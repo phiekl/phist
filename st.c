@@ -3126,34 +3126,60 @@ sigchld(int a)
 	_exit(0);
 }
 
+/* Run stty_args, split at blanks, and args without a shell to reparse them. */
 void
 stty(char **args)
 {
-	char cmd[_POSIX_ARG_MAX], **p, *q, *s;
-	size_t n, siz;
+	char *cmd, *s, **argv, **p;
+	size_t n = 0;
+	int status;
+	pid_t child;
 
-	if ((n = strlen(stty_args)) > sizeof(cmd)-1)
+	for (p = args; p && *p; ++p)
+		n++;
+	cmd = xstrdup(stty_args);
+	/* A word needs a blank after it, and there is room for the last one. */
+	argv = xmalloc((strlen(cmd) / 2 + 1 + n + 1) * sizeof(*argv));
+	n = 0;
+	for (s = strtok(cmd, " \t"); s; s = strtok(NULL, " \t"))
+		argv[n++] = s;
+	if (!n)
 		die("incorrect stty parameters\n");
-	memcpy(cmd, stty_args, n);
-	q = cmd + n;
-	siz = sizeof(cmd) - n;
-	for (p = args; p && (s = *p); ++p) {
-		if ((n = strlen(s)) > siz-1)
-			die("stty parameter length too long\n");
-		*q++ = ' ';
-		memcpy(q, s, n);
-		q += n;
-		siz -= n + 1;
-	}
-	*q = '\0';
-	if (system(cmd) != 0)
+	for (p = args; p && *p; ++p)
+		argv[n++] = *p;
+	argv[n] = NULL;
+
+	switch (child = fork()) {
+	case -1:
 		perror("Couldn't call stty");
+		break;
+	case 0:
+		execvp(argv[0], argv);
+		perror("Couldn't call stty");
+		_exit(127);
+	default:
+		while (waitpid(child, &status, 0) < 0) {
+			if (errno != EINTR) {
+				perror("Couldn't call stty");
+				status = 0;
+				break;
+			}
+		}
+		if (status)
+			fprintf(stderr, "stty failed\n");
+		break;
+	}
+	free(argv);
+	free(cmd);
 }
 
 int
 ttynew(const char *line, char *cmd, const char *out, char **args, const char *dir)
 {
 	int m, s;
+
+	/* An inherited SIG_IGN would prevent waiting for the child's status. */
+	signal(SIGCHLD, SIG_DFL);
 
 	if (out) {
 		term.mode |= MODE_PRINT;
