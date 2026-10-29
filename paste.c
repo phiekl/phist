@@ -980,7 +980,7 @@ pastechoose(int mode)
 	clock_gettime(CLOCK_MONOTONIC, &paste.shown);
 }
 
-/* Ctrl+C, which cancels, but not Ctrl+Shift+C, which copies in phist. */
+/* Ctrl+C cancels; Ctrl+Shift+C is ignored. */
 static int
 pastectrlc(KeySym key, uint state)
 {
@@ -1011,7 +1011,7 @@ pastekey(KeySym key, uint state)
 	}
 	if (paste.state != PASTE_CONFIRM)
 		return 0;
-	/* The binding to clipcopy, Ctrl+Shift+C, copies in the full view
+	/* A configured binding to clipcopy copies in the full view
 	 * as c does, and does nothing elsewhere; it never cancels. */
 	for (bp = shortcuts; bp < shortcuts + LEN(shortcuts); bp++) {
 		if (key == bp->keysym && match(bp->mod, state) &&

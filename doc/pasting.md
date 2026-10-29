@@ -5,8 +5,8 @@ program.
 
 ## What prompts for confirmation
 
-PRIMARY and CLIPBOARD paste use the same path, including middle-click,
-Shift+Insert and Ctrl+Shift+V. Empty pastes send nothing. Ordinary text
+Middle-click, Shift+Insert and any binding configured for CLIPBOARD paste
+(`clippaste`) use the same path. Empty pastes send nothing. Ordinary text
 without newlines, tabs, controls or invalid UTF-8 is sent immediately and
 unchanged. Other pastes are collected in full and shown in a dialog before
 anything reaches the child.
@@ -103,7 +103,7 @@ without a drag clears the highlight and leaves PRIMARY as it was. Dragging above
 or below the text, even outside the window, scrolls a row per motion. Closing
 the view during a drag does not claim PRIMARY.
 
-C or the configured copy binding (normally Ctrl+Shift+C) copies the
+C or a configured copy binding copies the
 selection, or the whole paste if nothing is selected, to CLIPBOARD. Ctrl+C
 without Shift still cancels. The footer changes from `Copy all` to `Copy
 selection` and then `Copied to clipboard` until the next key. Narrow windows

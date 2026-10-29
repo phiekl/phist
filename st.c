@@ -4409,13 +4409,6 @@ strreset(void)
 }
 
 void
-sendbreak(const Arg *arg)
-{
-	if (tcsendbreak(cmdfd, 0))
-		perror("Error sending break");
-}
-
-void
 tprinter(char *s, size_t len)
 {
 	if (iofd != -1 && xwrite(iofd, s, len) < 0) {
@@ -4423,24 +4416,6 @@ tprinter(char *s, size_t len)
 		close(iofd);
 		iofd = -1;
 	}
-}
-
-void
-toggleprinter(const Arg *arg)
-{
-	term.mode ^= MODE_PRINT;
-}
-
-void
-printscreen(const Arg *arg)
-{
-	tdump();
-}
-
-void
-printsel(const Arg *arg)
-{
-	tdumpsel();
 }
 
 void

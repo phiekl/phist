@@ -213,7 +213,7 @@ e.g. `Keep LF` or `Keep LF, keep TAB`.
 | `q`                         | -                                      | back to the dialog |
 | Esc                         | cancel                                 | back to the dialog |
 | Ctrl+C, also with Caps Lock | cancel                                 | cancel           |
-| Ctrl+Shift+C (`clipcopy`)   | ignored                                | like `c`         |
+| Configured copy binding (`clipcopy`) | ignored                       | like `c`         |
 | other Ctrl/Alt combinations | ignored                                | ignored          |
 
 Choices, by key or Enter, are ignored for 500 ms (`pasteenterdelay`)
@@ -239,8 +239,8 @@ in the terminal; a click without a drag clears the selection shown,
 leaving PRIMARY as it was. Dragging above or below the text, also
 outside the window, scrolls a row per motion. Copied text is escaped as
 shown, a backslash as `\\` included, but newlines are copied as they
-are, so it holds no other control characters. `c`, or phist's copy binding
-Ctrl+Shift+C, copies the selection, or the whole paste if there is none,
+are, so it holds no other control characters. `c`, or a configured copy
+binding, copies the selection, or the whole paste if there is none,
 to CLIPBOARD; its label below the text then says `Copied to clipboard`
 until the next key. Copies have no size limit of their own: escaping can
 make a 32 MiB paste 128 MiB, far past what one X request can carry, and
@@ -283,7 +283,7 @@ The box shows for 5 s. Esc, Ctrl+C or Enter close it sooner, but not
 within 500 ms (`pasteenterdelay`) of it appearing. While it is shown, it
 is modal like the dialog: the wheel scrolls history, but other keys and
 mouse clicks do nothing, except
-that the paste bindings (Ctrl+Shift+V, Shift+Insert, middle-click, or
+that the paste bindings (Shift+Insert, middle-click, or
 whatever config.h binds to clippaste and selpaste), with their
 modifiers, retry at once, replacing the box. Such a click does nothing
 else, e.g. start a selection. An empty or refused selection is not a failure and

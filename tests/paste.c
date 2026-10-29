@@ -690,8 +690,7 @@ testcontrols(int fd)
 	press(XK_Escape, 0);
 	assert(paste.state == PASTE_IDLE);
 	expect(fd, NULL);
-	/* Ctrl+C cancels as well, also with Caps Lock, but not Ctrl+Shift+C,
-	 * which copies in phist: it does nothing in the dialog. */
+	/* Ctrl+C cancels as well, also with Caps Lock. Ctrl+Shift+C is ignored. */
 	transfer("cancel\n", 7);
 	press(XK_c, ControlMask);
 	assert(paste.state == PASTE_IDLE);
@@ -2033,15 +2032,13 @@ testdialog(int fd)
 	assert(paste.state == PASTE_CONFIRM && !testmouse_alldirty());
 	pasteclear();
 	asked = requests;
-	/* Pasting by Ctrl+Shift+V, Shift+Insert or a middle-click retries,
+	/* Ctrl+Shift+Y is ignored. Shift+Insert or a middle-click retries
 	 * at once, replacing the box. */
 	pastefailed("The selection owner sent invalid data");
-	pressnow(XK_V, ControlMask | ShiftMask);
-	assert(!pastefail.text[0] && paste.state == PASTE_WAIT && requests == asked + 1);
-	pasteclear();
-	pastefailed("The selection owner sent invalid data");
+	pressnow(XK_Y, ControlMask | ShiftMask);
+	assert(pastefail.text[0] && requests == asked);
 	pressnow(XK_Insert, ShiftMask);
-	assert(!pastefail.text[0] && paste.state == PASTE_WAIT && requests == asked + 2);
+	assert(!pastefail.text[0] && paste.state == PASTE_WAIT && requests == asked + 1);
 	pasteclear();
 	pastefailed("The selection owner sent invalid data");
 	click.xbutton.type = ButtonPress;
@@ -2050,7 +2047,7 @@ testdialog(int fd)
 	assert(pastefail.text[0]);
 	click.xbutton.type = ButtonRelease;
 	brelease(&click);
-	assert(!pastefail.text[0] && paste.state == PASTE_WAIT && requests == asked + 3);
+	assert(!pastefail.text[0] && paste.state == PASTE_WAIT && requests == asked + 2);
 	pasteclear();
 	expect(fd, NULL);
 	/* A paste binding needs its modifiers to retry: with Ctrl+Button1
@@ -2433,10 +2430,12 @@ testdialog(int fd)
 	assert(dialogrow("Copied to clipboard") == -1 && paste.marked);
 	press(XK_c, Mod1Mask); /* not with Alt; Ctrl+C cancels */
 	assert(owned == 3 && paste.viewing);
-	/* Ctrl+Shift+C, phist's copy binding, copies as c does. */
+	/* Ctrl+Shift+C is ignored; c still copies the new selection. */
 	drag(3, 7, 9, 7);
 	assert(owned == 4 && !strcmp(xsel.primary, "line 01"));
 	press(XK_C, ControlMask | ShiftMask);
+	assert(owned == 4 && paste.viewing && !strcmp(xsel.clipboard, "line"));
+	press(XK_c, 0);
 	assert(owned == 5 && paste.viewing && paste.copied > 0);
 	assert(!strcmp(xsel.clipboard, "line 01"));
 	/* The release position counts, though no motion reported it. */
@@ -2843,7 +2842,7 @@ testsearchinput(int fd)
 		mshortcuts[0].func = selpaste;
 		mshortcuts[0].button = button;
 	}
-	press(XK_V, TERMMOD);
+	press(XK_Insert, ShiftMask);
 	assert(paste.state == PASTE_WAIT);
 	press(XK_Escape, 0);
 	assert(!tsearchactive() && paste.state == PASTE_IDLE);
@@ -3362,6 +3361,52 @@ testsearchcolors(void)
 	lookuptext = "x";
 }
 
+static void
+testrestoredshortcuts(int fd)
+{
+	static const struct { KeySym key; uint mod; } keys[] = {
+		{ XK_Print, 0 }, { XK_Break, 0 },
+		{ XK_C, ControlMask | ShiftMask }, { XK_V, ControlMask | ShiftMask },
+		{ XK_Y, ControlMask | ShiftMask }, { XK_Num_Lock, ControlMask | ShiftMask },
+	};
+	Shortcut saved = shortcuts[0];
+	int i, before;
+
+	lookuptext = "\003";
+	setsel(xstrdup("configured copy"), CurrentTime);
+	for (i = 0; i < LEN(keys); i++) {
+		shortcuts[0].keysym = keys[i].key;
+		shortcuts[0].mod = keys[i].mod;
+		shortcuts[0].func = clipcopy;
+		before = owned;
+		press(keys[i].key, keys[i].mod);
+		assert(owned == before + 1 && !strcmp(xsel.clipboard, xsel.primary));
+		shortcuts[0].keysym = saved.keysym;
+		shortcuts[0].mod = saved.mod;
+		shortcuts[0].func = saved.func;
+		press(keys[i].key, keys[i].mod);
+		assert(owned == before + 1);
+		expect(fd, NULL);
+	}
+	/* A configured copy binding also works in the paste's full view. */
+	shortcuts[0].keysym = XK_C;
+	shortcuts[0].mod = ControlMask | ShiftMask;
+	shortcuts[0].func = clipcopy;
+	lookuptext = "";
+	transfer("one\ntwo", 7);
+	press(XK_v, 0);
+	assert(paste.viewing);
+	press(XK_C, ControlMask | ShiftMask);
+	assert(!strcmp(xsel.clipboard, "one\ntwo") && paste.copied);
+	press(XK_Escape, 0);
+	press(XK_Escape, 0);
+	shortcuts[0].keysym = saved.keysym;
+	shortcuts[0].mod = saved.mod;
+	shortcuts[0].func = saved.func;
+	lookuptext = "x";
+	expect(fd, NULL);
+}
+
 int
 main(void)
 {
@@ -3399,6 +3444,7 @@ main(void)
 	testsearchstatus();
 	testsearchcolors();
 	testhyperlinkbox(sockets[1]);
+	testrestoredshortcuts(sockets[1]);
 	vbellfree();
 	free(display);
 	close(sockets[0]);

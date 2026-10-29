@@ -66,7 +66,6 @@ enum undercurl_slope_type {
 /* function definitions used in config.h */
 static void clipcopy(const Arg *);
 static void clippaste(const Arg *);
-static void numlock(const Arg *);
 static void selpaste(const Arg *);
 static void pastestart(Atom);
 static void pasteclear(void);
@@ -991,12 +990,6 @@ searchdraw(void)
 		}
 	}
 	pasteshift = 0;
-}
-
-void
-numlock(const Arg *dummy)
-{
-	win.mode ^= MODE_NUMLOCK;
 }
 
 void
@@ -3696,9 +3689,10 @@ void
 kpress(XEvent *ev)
 {
 	XKeyEvent *e = &ev->xkey;
-	KeySym ksym = NoSymbol;
+	KeySym ksym = NoSymbol, lower;
 	char buf[64], *customkey;
 	int len;
+	uint mods;
 	Rune c;
 	Status status;
 	Shortcut *bp;
@@ -3710,6 +3704,8 @@ kpress(XEvent *ev)
 	} else {
 		len = XLookupString(e, buf, sizeof buf, &ksym, NULL);
 	}
+	lower = ksym >= XK_A && ksym <= XK_Z ? ksym + XK_a - XK_A : ksym;
+	mods = e->state & ~(ignoremod | LockMask);
 	if (urlboxkey(ksym, e->state))
 		return;
 	if (pastekey(ksym, e->state))
@@ -3723,6 +3719,14 @@ kpress(XEvent *ev)
 			return;
 		}
 	}
+
+	/* Honor configured shortcuts first; suppress unbound disabled keys. */
+	if (ksym == XK_Break || ksym == XK_Print ||
+	    (lower == XK_v &&
+	     (mods == ControlMask || mods == (ControlMask | ShiftMask))) ||
+	    (mods == (ControlMask | ShiftMask) &&
+	     (lower == XK_c || lower == XK_y || ksym == XK_Num_Lock)))
+		return;
 
 	/* 2. custom keys from config.h */
 	if ((customkey = kmap(ksym, e->state))) {

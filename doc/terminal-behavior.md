@@ -32,7 +32,7 @@ Application-controlled Media Copy sequences work only when phist was started
 with `-o FILE`. Without it, `iofd` is phist's own stdout, potentially the
 launching terminal or a session log; output from any application could
 otherwise turn on raw copying with `CSI 5 i` or dump the screen/selection
-with `CSI 0/1/2 i`. Local Print-key shortcuts are unaffected.
+with `CSI 0/1/2 i`. Print Screen keyboard shortcuts are disabled.
 
 To check, run these inside a phist started without `-o`:
 

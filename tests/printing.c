@@ -41,6 +41,6 @@ main(void)
 	reset(20, 3);
 	put("\344\270\255\r\n\r\nx");
 	dump_is("\344\270\255\n\nx\n", NULL);
-	puts("PASS: print-screen uses displayed history, blank rows and wide UTF-8 glyphs; Media Copy needs -o");
+	puts("PASS: screen dumps use displayed history, blank rows and wide UTF-8 glyphs; Media Copy needs -o");
 	return 0;
 }

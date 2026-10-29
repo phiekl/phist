@@ -50,8 +50,9 @@ terminal output.
 - Enter closes search and keeps the result in view.
 - Escape or Ctrl+C cancels and restores the view from before searching.
 - Backspace or Delete removes the last character; Ctrl+U clears the query.
-- Clipboard paste shortcuts insert into the query, using the usual paste
-  confirmation when needed. Search input is never sent to the child process.
+- Paste shortcuts, Shift+Insert by default, insert into the query, using the
+  usual paste confirmation when needed. Search input is never sent to the
+  child process.
 
 The search bar is styled like the paste dialog. Its sunken query field
 shows a hint when empty. The right side shows the current match and total,

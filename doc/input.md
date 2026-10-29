@@ -10,6 +10,11 @@ screen; a selection remains attached to its text. Protocol replies use a
 separate path, so cursor-position queries leave the history view in place.
 OSC color replies are not locally echoed.
 
+Ctrl+V, Ctrl+Shift+V, Ctrl+Shift+C, Ctrl+Shift+Y, Ctrl+Shift+Num Lock,
+Break and Print Screen (with any modifiers) are ignored when unbound.
+Bindings configured in `shortcuts` still take precedence. Shift+Insert
+pastes from PRIMARY.
+
 Run `LC_ALL=C.UTF-8 sh tests/replies.sh` for reply and empty/nonempty-input
 regressions. History selection behavior is also covered by
 `tests/history.sh`.
@@ -44,10 +49,10 @@ typed commands. Pastes also undergo [confirmation](pasting.md) independently
 of this mode; the chosen text then follows the mode's delivery rules.
 
 For a check that does not execute the pasted text, copy a crafted string,
-then paste it into `cat -v` with Ctrl+Shift+V:
+then paste it into `cat -v` with Shift+Insert:
 
 ```sh
-printf 'harmless\033[201~id\n' | xclip -selection clipboard
+printf 'harmless\033[201~id\n' | xclip -selection primary
 printf '\033[?2004h'; cat -v
 ```
 
