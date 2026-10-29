@@ -168,6 +168,18 @@ static unsigned int searchmatchtextcolor = 0x000000;
 static unsigned int searchothermatchcolor = 0x705818;
 static unsigned int searchothermatchtextcolor = 0xffe4a0;
 
+/*
+ * Keyboard selection: the tint over the window and its opacity (0-1), then the
+ * bar with the mode's name: its background, text and outline, and the opacity
+ * (0-1) it fades to at the right. Colors are 0xRRGGBB.
+ */
+static unsigned int vimtintcolor = 0xe3436b;
+static double vimtintopacity = 0.2;
+static unsigned int vimlabelcolor = 0xa976ba;
+static unsigned int vimlabeltextcolor = 0x2d0d38;
+static unsigned int vimlabeloutlinecolor = 0x633b70;
+static double vimlabelfadeopacity = 0.05;
+
 /* default TERM value */
 char *termname = "phist-256color";
 
@@ -282,6 +294,7 @@ static Shortcut shortcuts[] = {
 	{ ShiftMask,            XK_Next,        kscrolldown,    {.i = -1} },
 	{ ControlMask,          XK_slash,       searchstart,    {.i =  0} },
 	{ ControlMask|ShiftMask, XK_slash,       searchstart,    {.i =  0} },
+	{ ControlMask,          XK_v,           vimstart,       {.i =  0} },
 	{ ControlMask,          XK_plus,        zoom,           {.f = +1} },
 	{ ControlMask|ShiftMask, XK_plus,       zoom,           {.f = +1} },
 	{ ControlMask,          XK_minus,       zoom,           {.f = -1} },

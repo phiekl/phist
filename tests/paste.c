@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <fcntl.h>
 #include <locale.h>
+#include <setjmp.h>
 #include <sys/socket.h>
 #define VERSION "test"
 #define main st_main
@@ -45,6 +46,17 @@ static unsigned long framepixels[4];
 static int presenting, bellfills;
 static int failpixmap, faildraw, failpicture, drawchanges;
 static Drawable maindrawable = 2;
+static jmp_buf fontjump;
+static int fontcalls, fontprobe;
+
+/* Stop zoom at its first font operation: the renderer uses fake fonts. */
+void
+XftFontClose(Display *d, XftFont *font)
+{
+	assert(fontprobe);
+	fontcalls++;
+	longjmp(fontjump, 1);
+}
 
 static Drawable
 drawtarget(Draw d)
@@ -241,7 +253,7 @@ XRenderFillRectangles(Display *d, int op, Picture p, const XRenderColor *c,
 		XRenderFillRectangle(d, op, p, c, r[i].x, r[i].y, r[i].width, r[i].height);
 }
 
-/* Bars fading from left to right. */
+/* Keyboard selection's bar, fading from left to right. */
 static struct {
 	int x, y, w, h, start, end;
 	XRenderColor left, right;
@@ -2665,6 +2677,38 @@ testclipfailure(void)
 }
 
 static void
+testmodalshortcuts(int fd)
+{
+	int mode, lock, before;
+
+	lookuptext = "";
+	fontprobe = 1;
+	for (mode = 0; mode < 3; mode++) {
+		if (mode == 1)
+			press(XK_slash, ControlMask);
+		else if (mode == 2)
+			press(XK_v, ControlMask);
+		for (lock = 0; lock <= 1; lock++) {
+			before = fontcalls;
+			if (!setjmp(fontjump))
+				press(XK_minus, ControlMask | (lock ? LockMask : 0));
+			assert(fontcalls == before + 1);
+		}
+		if (mode == 1) {
+			before = requests;
+			press(XK_Insert, ShiftMask | LockMask);
+			assert(requests == before + 1 && paste.state == PASTE_WAIT);
+			pasteclear();
+		}
+		if (mode)
+			press(XK_Escape, 0);
+	}
+	fontprobe = 0;
+	lookuptext = "x";
+	expect(fd, NULL);
+}
+
+static void
 testsearchinput(int fd)
 {
 	char longquery[SEARCH_MAX + 32];
@@ -3289,6 +3333,20 @@ testhyperlinkbox(int fd)
 	lookuptext = "x";
 }
 
+/* Press keys with the text they would type. */
+static void
+vimtype(const char *keys)
+{
+	char text[2] = "";
+
+	for (; *keys; keys++) {
+		text[0] = *keys;
+		lookuptext = text;
+		press((uchar)*keys, 0);
+	}
+	lookuptext = "";
+}
+
 /* The search bar's settings, apart from those of paste dialogs. */
 static void
 testsearchcolors(void)
@@ -3362,6 +3420,258 @@ testsearchcolors(void)
 }
 
 static void
+testvimkeys(int fd)
+{
+	int before, labelh;
+
+	/* The settings apply, apart from the search bar's colors. */
+	vimtintcolor = 0x102030;
+	vimtintopacity = 0.25;
+	vimlabelcolor = 0x405060;
+	vimlabeltextcolor = 0x708090;
+	vimlabeloutlinecolor = 0xa0b0c0;
+	vimlabelfadeopacity = 0.5;
+	lookuptext = "";
+	resizewindow(80, 5);
+	tresize(80, 5);
+	testmouse_put("\033[H\033[2Jalpha beta\r\ngamma delta\r\nend");
+	press(XK_v, ControlMask);
+	assert(tvimactive() == VIM_NORMAL);
+
+	/* The window is tinted, and the name shows at the left of a bar along
+	 * the bottom, as tall as the search bar and fading to the right. */
+	presentframe();
+	assert(dialogrow(" NORMAL ") == 3);
+	assert(painted[3][1] == 'N' && ink[3][1] == 0x708090);
+	assert(blends[0].x == 0 && blends[0].y == 0 && blends[0].alpha == 0x3fff);
+	assert(blends[0].w == win.w && blends[0].h == win.h);
+	assert(blends[0].red == 0x1010 * 0x3fff / 0xffff);
+	assert(blends[0].green == 0x2020 * 0x3fff / 0xffff);
+	assert(blends[0].blue == 0x3030 * 0x3fff / 0xffff);
+	assert(framepixels[xw.win] != framepixels[xw.buf]);
+	assert(nfades == 2 && !livegradients);
+	assert(fades[0].x == 0 && fades[0].w == win.w);
+	assert(fades[0].y + fades[0].h == win.h);
+	assert(fades[0].left.red == 0x4040 && fades[0].left.blue == 0x6060);
+	assert(fades[0].left.alpha == 0xffff && fades[0].right.alpha == 0x7fff);
+	assert(fades[0].right.red == 0x4040 && fades[0].end == win.w);
+	assert(fades[1].y == fades[0].y - 1 && fades[1].h == 1);
+	assert(fades[1].left.red == 0xa0a0 && fades[1].left.alpha == 0x9000);
+	labelh = fades[0].h;
+
+	/* It goes with the next key, though not a modifier, and the tint stays. */
+	press(XK_Shift_L, ShiftMask);
+	presentframe();
+	assert(nfades == 2);
+	press(XK_Down, 0);
+	presentframe();
+	assert(dialogrow(" NORMAL ") == -1 && !nfades);
+	assert(blends[0].alpha == 0x3fff);
+	/* Even a key that changes nothing draws without it. */
+	press(XK_v, ControlMask);
+	press(XK_v, ControlMask);
+	assert(tvimactive() == VIM_NORMAL);
+	press(XK_Up, Mod1Mask);
+	presentframe();
+	assert(!nfades);
+	/* Nor does it move out of the cursor's way. */
+	press(XK_v, ControlMask);
+	press(XK_v, ControlMask);
+	vimtype("L");
+	press(XK_v, ControlMask);
+	press(XK_v, ControlMask);
+	presentframe();
+	assert(dialogrow(" NORMAL ") == 3 && fades[0].h == labelh);
+	/* Earlier tests left history, so H rather than gg finds this text. */
+	vimtype("H");
+	presentframe();
+	assert(dialogrow(" NORMAL ") == -1);
+
+	/* A change of mode shows the new name until the next key. */
+	vimtype("v");
+	presentframe();
+	assert(dialogrow(" VISUAL ") == 3);
+	vimtype("l");
+	presentframe();
+	assert(dialogrow(" VISUAL ") == -1 && !nfades);
+	vimtype("V");
+	presentframe();
+	assert(dialogrow(" V-LINE ") == 3);
+	press(XK_Escape, 0);
+	presentframe();
+	assert(dialogrow(" NORMAL ") == 3);
+	vimtype("0");
+	presentframe();
+	assert(!nfades);
+
+	/* Ctrl+V selects a block rather than starting the mode again, also
+	 * with Caps Lock. Disabled keys stay inert. */
+	press(XK_v, ControlMask);
+	assert(tvimactive() == VIM_BLOCK);
+	presentframe();
+	assert(dialogrow(" V-BLOCK ") == 3);
+	press(XK_Escape, 0);
+	press(XK_V, ControlMask | LockMask);
+	assert(tvimactive() == VIM_BLOCK);
+	press(XK_bracketleft, ControlMask);
+	assert(tvimactive() == VIM_NORMAL);
+	press(XK_Break, 0);
+	press(XK_Print, 0);
+	assert(tvimactive() == VIM_NORMAL);
+
+	/* Special keys mean their Vim commands. */
+	press(XK_Right, 0);
+	press(XK_KP_Right, 0);
+	assert(tvimcursor(2, tvimrow()));
+	press(XK_Left, 0);
+	assert(tvimcursor(1, tvimrow()));
+	press(XK_Home, 0);
+	assert(tvimcursor(0, tvimrow()));
+	press(XK_End, 0);
+	assert(tvimcursor(9, tvimrow()));
+	press(XK_dead_circumflex, 0);
+	assert(tvimcursor(0, tvimrow()));
+	press(XK_Down, 0);
+	assert(tvimrow() == 1);
+	press(XK_Up, 0);
+	assert(tvimrow() == 0);
+	/* Named motions cancel pending character finds, and Home is never a
+	 * zero appended to a count. Typed 0 still completes a numeric count. */
+	vimtype("5");
+	press(XK_Home, 0);
+	assert(tvimcursor(0, tvimrow()));
+	press(XK_Right, 0);
+	assert(tvimcursor(1, tvimrow()));
+	vimtype("f");
+	press(XK_Left, 0);
+	assert(tvimcursor(0, tvimrow()));
+	vimtype("llf");
+	press(XK_KP_Home, 0);
+	assert(tvimcursor(0, tvimrow()));
+	vimtype("5");
+	press(XK_Right, 0);
+	assert(tvimcursor(5, tvimrow()));
+	vimtype("50h");
+	assert(tvimcursor(0, tvimrow()));
+
+	/* Alt and Super do nothing, and keys without text keep what is pending. */
+	lookuptext = "w";
+	press(XK_w, Mod1Mask);
+	press(XK_w, Mod4Mask);
+	assert(tvimcursor(0, tvimrow()));
+	lookuptext = "";
+	vimtype("f");
+	press(XK_Shift_L, ShiftMask);
+	vimtype("b");
+	assert(tvimcursor(6, tvimrow()));
+	vimtype("0");
+
+	/* The mouse reaches nothing but the wheel beneath the mode. */
+	before = owned;
+	clickat(3, 1);
+	drag(0, 0, 4, 0);
+	assert(tvimactive() == VIM_NORMAL && owned == before && !urlbox.text);
+	assert(!getsel());
+	wheel(Button4);
+	assert(tvimactive() == VIM_NORMAL);
+	press(XK_Escape, 0);
+	assert(!tvimactive());
+	press(XK_v, ControlMask);
+
+	/* A copy goes to PRIMARY and CLIPBOARD, and ends the mode. Nothing
+	 * typed reached the child. */
+	vimtype("Hve");
+	presentframe();
+	assert(dialogrow(" VISUAL ") == -1 && !nfades);
+	before = owned;
+	vimtype("y");
+	assert(!tvimactive() && owned == before + 2);
+	assert(!strcmp(xsel.primary, "alpha") && !strcmp(xsel.clipboard, "alpha"));
+	presentframe();
+	assert(framepixels[xw.win] == framepixels[xw.buf]);
+	expect(fd, NULL);
+
+	/* Search takes keys while it is open, the cursor moving to its result. */
+	press(XK_v, ControlMask);
+	vimtype("/");
+	assert(tsearchactive() && tvimactive());
+	presentframe();
+	assert(dialogrow(" NORMAL ") == -1 && !nfades);
+	assert(dialogrow(" Type to search scrollback ... ") == 3);
+	/* The tint stays, under a bar of the label's height. */
+	assert(blends[0].alpha == 0x3fff && blends[0].w == win.w && blends[0].h == win.h);
+	assert(blends[1].alpha == 0xffff && blends[1].w == win.w && blends[1].h == labelh);
+	assert(blends[1].blue == 0xebeb); /* its own color, not the tint's */
+	assert(blends[0].order < blends[1].order);
+	vimtype("delta");
+	press(XK_v, ControlMask); /* still ignored by the search field */
+	assert(searchlen == 5);
+	press(XK_Return, 0);
+	assert(!tsearchactive() && tvimactive() == VIM_NORMAL);
+	vimtype("ve");
+	assert(!strcmp(getsel(), "delta"));
+	press(XK_Escape, 0);
+	/* Escape leaves search only, then the mode. */
+	vimtype("/");
+	press(XK_Escape, 0);
+	assert(!tsearchactive() && tvimactive());
+	press(XK_Escape, 0);
+	assert(!tvimactive());
+	expect(fd, NULL);
+
+	/* Ctrl+V starts it also with Caps Lock, but
+	 * not from the search field or as Ctrl+Shift+V. */
+	press(XK_V, ControlMask | LockMask);
+	assert(tvimactive() == VIM_NORMAL);
+	press(XK_Escape, 0);
+	press(XK_V, ControlMask | ShiftMask);
+	assert(!tvimactive());
+	searchstart(NULL);
+	press(XK_v, ControlMask);
+	assert(tsearchactive() && !tvimactive() && !searchlen);
+	press(XK_Escape, 0);
+
+	/* A second Ctrl+V selects a block, as in Vim. */
+	press(XK_v, ControlMask);
+	press(XK_v, ControlMask);
+	assert(tvimactive() == VIM_BLOCK);
+	press(XK_Escape, 0);
+	press(XK_Escape, 0);
+	assert(!tvimactive());
+	expect(fd, NULL);
+
+	/* Ctrl+C and q leave without reaching the child. */
+	press(XK_v, ControlMask);
+	press(XK_c, ControlMask);
+	assert(!tvimactive());
+	press(XK_v, ControlMask);
+	vimtype("q");
+	assert(!tvimactive());
+	expect(fd, NULL);
+
+	/* It closes the link box and abandons a paste, then afterwards typing
+	 * reaches the child as usual. */
+	urlboxopen(xstrdup("https://example.com"), 0, 0, 0);
+	press(XK_v, ControlMask);
+	assert(tvimactive() && !urlbox.text);
+	press(XK_Escape, 0);
+	assert(!tvimactive());
+	lookuptext = "x";
+	press(XK_x, 0);
+	expect(fd, "x");
+
+	/* Without the overlay's pixmap the name is still drawn. */
+	failpixmap = 1;
+	vbellfree();
+	press(XK_v, ControlMask);
+	presentframe();
+	assert(dialogrow(" NORMAL ") == 3);
+	press(XK_Escape, 0);
+	failpixmap = 0;
+	lookuptext = "x";
+}
+
+static void
 testrestoredshortcuts(int fd)
 {
 	static const struct { KeySym key; uint mod; } keys[] = {
@@ -3407,6 +3717,90 @@ testrestoredshortcuts(int fd)
 	expect(fd, NULL);
 }
 
+static void
+testvimdrag(int fd)
+{
+	static const char *const text[] = {
+		"alpha beta", "https://example.com",
+		"\033]8;;https://example.com\033\\Project\033]8;;\033\\",
+	};
+	static const char *const selected[] = { "alp", "htt", "Pro" };
+	int i, before;
+	char *primary, *selection;
+
+	lookuptext = "";
+	resizewindow(80, 5);
+	tresize(80, 5);
+	for (i = 0; i < LEN(text); i++) {
+		testmouse_put("\033[H\033[2J");
+		testmouse_put(text[i]);
+		mouseat(ButtonPress, Button1, 0, 0);
+		press(XK_v, ControlMask | Button1Mask);
+		vimtype("H0vll");
+		before = owned;
+		primary = xsel.primary ? xstrdup(xsel.primary) : NULL;
+		mouseat(MotionNotify, 0, 7, 0);
+		mouseat(ButtonRelease, Button1, 7, 0);
+		assert(tvimactive() == VIM_VISUAL && owned == before && !urlbox.text);
+		assert(!urlclick.active && !urlclick.text);
+		assert(!primary || !strcmp(primary, xsel.primary));
+		free(primary);
+		selection = getsel();
+		assert(selection && !strcmp(selection, selected[i]));
+		free(selection);
+		vimtype("q");
+
+		/* A release over the original URL must not activate it either. */
+		mouseat(ButtonPress, Button1, 0, 0);
+		press(XK_v, ControlMask | Button1Mask);
+		mouseat(ButtonRelease, Button1, 0, 0);
+		assert(owned == before && !urlbox.text && tvimactive());
+		vimtype("q");
+	}
+	/* Starting and leaving without a held button must allow the next drag. */
+	testmouse_put("\033[H\033[2Jalpha beta");
+	press(XK_v, ControlMask);
+	vimtype("q");
+	drag(0, 0, 2, 0);
+	assert(!strcmp(xsel.primary, "alp"));
+	expect(fd, NULL);
+}
+
+static void
+testvimheldbuttons(int fd)
+{
+	uint button, savedbutton = mshortcuts[0].button;
+	int leavefirst, before;
+
+	lookuptext = "";
+	for (button = Button2; button <= Button5; button++) {
+		/* Exercise the default middle-button paste and configured release
+		 * bindings on the other buttons, also when leaving before release. */
+		mshortcuts[0].button = button;
+		for (leavefirst = 0; leavefirst <= 1; leavefirst++) {
+			before = requests;
+			mouseat(ButtonPress, button, 0, 0);
+			press(XK_v, ControlMask | buttonmask(button));
+			assert(tvimactive());
+			if (leavefirst)
+				vimtype("q");
+			mouseat(ButtonRelease, button, 0, 0);
+			assert(requests == before && paste.state == PASTE_IDLE);
+			if (!leavefirst)
+				vimtype("q");
+		}
+		/* A new gesture after leaving still invokes its binding once. */
+		before = requests;
+		mouseat(ButtonPress, button, 0, 0);
+		mouseat(ButtonRelease, button, 0, 0);
+		assert(requests == before + 1 && paste.state == PASTE_WAIT);
+		pasteclear();
+	}
+	mshortcuts[0].button = savedbutton;
+	lookuptext = "x";
+	expect(fd, NULL);
+}
+
 int
 main(void)
 {
@@ -3439,16 +3833,20 @@ main(void)
 	testclipfailure();
 	testdialog(sockets[1]);
 	testpresentationfallback(sockets[1]);
+	testmodalshortcuts(sockets[1]);
 	testsearchinput(sockets[1]);
 	testsearchunchanged(sockets[1]);
 	testsearchstatus();
-	testsearchcolors();
 	testhyperlinkbox(sockets[1]);
+	testsearchcolors();
+	testvimkeys(sockets[1]);
+	testvimdrag(sockets[1]);
+	testvimheldbuttons(sockets[1]);
 	testrestoredshortcuts(sockets[1]);
 	vbellfree();
 	free(display);
 	close(sockets[0]);
 	close(sockets[1]);
-	puts("PASS: control confirmation, sanitizing, UTF-8 preview, whole INCR transfers, ignored late replies, fixed paste mode, transfer limits/timeouts, dialog layout, navigation, asking before the original, full view, redraw, search input and OSC 8 target boxes");
+	puts("PASS: control confirmation, sanitizing, UTF-8 preview, whole INCR transfers, ignored late replies, fixed paste mode, transfer limits/timeouts, dialog layout, navigation, asking before the original, full view, redraw, search input, OSC 8 target boxes and keyboard selection keys");
 	return 0;
 }

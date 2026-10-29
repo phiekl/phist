@@ -35,6 +35,43 @@ expectmatch(uint64_t row, int x, uint64_t endrow, int endx)
 	assert(tsearchmatch(x - 1, y) != SEARCH_CURRENT);
 }
 
+static void
+testcounts(void)
+{
+	static const SearchPos starts[] = { {0, 0}, {0, 2}, {1, 0}, {2, 0}, {3, 2} };
+	static const SearchPos ends[] = { {0, 2}, {1, 0}, {1, 2}, {2, 2}, {4, 0} };
+	static const int counts[] = { 1, 2, 3, 4, 5, 6, 7, 9, 10, 101, 99999 };
+	SearchPos pivot;
+	int row, x, direction, i, first, want, count = LEN(starts);
+
+	reset(4, 3);
+	put("abababa\r\naba\r\nxxaba");
+	find("aba");
+	for (row = 0; row <= 5; row++) {
+		for (x = -1; x <= 4; x++) {
+			pivot = (SearchPos){row, x};
+			for (direction = -1; direction <= 1; direction += 2) {
+				first = direction > 0 ? 0 : count - 1;
+				for (i = 0; i < count; i++) {
+					int k = direction > 0 ? i : count - 1 - i;
+					if (searchcmp(starts[k], pivot) * direction > 0) {
+						first = k;
+						break;
+					}
+				}
+				for (i = 0; i < LEN(counts); i++) {
+					want = (first + direction * ((counts[i] - 1) % count) + count) % count;
+					searchscan(direction, pivot, 1, counts[i]);
+					expectcount(count, want + 1);
+					expectmatch(starts[want].row, starts[want].x,
+					            ends[want].row, ends[want].x);
+				}
+			}
+		}
+	}
+	tsearchend(1);
+}
+
 int
 main(void)
 {
@@ -44,6 +81,7 @@ main(void)
 	int i, cols, count;
 
 	assert(setlocale(LC_CTYPE, "C.UTF-8"));
+	testcounts();
 	reset(20, 3);
 	put("old needle\r\nother\r\nnew needle\r\nlive");
 	assert(sb.len == 1);

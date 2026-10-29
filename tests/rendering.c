@@ -280,6 +280,23 @@ testvisibility(void)
 	selclear();
 	xdrawline(line, 0, 0, 8);
 	assert(painted[1] == 0xffffff && backgrounds[1] == 0x990000);
+	/* The keyboard selection cursor reverses its cell, showing through a
+	 * selection, and is drawn without the terminal's cursor. */
+	tvimstart();
+	tvimkey('0', 0);
+	tvimkey('l', 0);
+	xdrawline(line, 0, 0, 8);
+	assert(painted[0] == 0xffffff && backgrounds[0] == 0x990000);
+	assert(painted[1] == 0x990000 && backgrounds[1] == 0xffffff);
+	assert(painted[2] == 0xffffff && backgrounds[2] == 0x990000);
+	tvimkey('v', 0);
+	tvimkey('l', 0);
+	xdrawline(line, 0, 0, 8);
+	assert(painted[1] == 0x990000 && backgrounds[1] == 0xffffff);
+	assert(painted[2] == 0xffffff && backgrounds[2] == 0x990000);
+	tvimend();
+	xdrawline(line, 0, 0, 8);
+	assert(painted[1] == 0xffffff && backgrounds[1] == 0x990000);
 	selstart(0, 0, 0);
 	selextend(5, 0, SEL_REGULAR, 0);
 	selextend(5, 0, SEL_REGULAR, 1);

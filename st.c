@@ -43,6 +43,7 @@
 #define CAR_PER_ARG   6
 #define URLTARGET_MAX 2048 /* characters of a URL underlined and copied */
 #define SELCONTEXT    4096 /* cells either side of a click matched by selection patterns */
+#define VIM_COUNT_MAX 99999 /* bound repeated motions and multi-key counts */
 #define STR_BUF_SIZ   ESC_BUF_SIZ
 #define STR_MAX_SIZ   (1 << 20) /* longer DCS/OSC/PM/APC strings are discarded */
 #define TITLE_MAX     512       /* bytes of a window title set by applications */
@@ -355,6 +356,18 @@ static struct {
 
 static void searchvalidate(void);
 static void searchmarks(void);
+
+static struct {
+	int mode; /* VIM_NORMAL and up, or 0 outside the mode */
+	int count, originlive, searchdir;
+	Rune pending, find, findkind;
+	SearchPos pos, anchor;
+	uint64_t origin;
+} vim;
+
+static void vimupdate(void);
+static void vimvalidatesel(void);
+static void vimvalidate(void);
 static regex_t *selpatterns; /* compiled selectionpatterns */
 static int nselpatterns;
 
@@ -1121,9 +1134,18 @@ tsearchend(int cancel)
 {
 	if (!search.active)
 		return;
+	if (vim.mode && !cancel && search.found)
+		vim.pos = search.start;
 	search.active = search.found = search.refresh = 0;
-	if (cancel)
+	if (cancel) {
 		searchview(search.originlive ? sb.base + sb_maxoffset() : search.origin);
+		/* n and N have nothing to repeat after a cancelled search. */
+		search.len = 0;
+	}
+	if (vim.mode) {
+		vimvalidatesel();
+		vimupdate();
+	}
 	tfulldirt();
 }
 
@@ -1142,25 +1164,29 @@ searchfeed(Rune u, int *matched)
 	return 1;
 }
 
-/* Find the nearest match past pivot in direction, wrapping around if
+/* Find the nth match past pivot in direction, wrapping around if
  * asked, or else keeping the current match if there is none. Return
  * whether there was one past pivot. Scan once using KMP, including
- * overlapping matches. Only a query-sized ring of positions is needed; the
- * retained history is never flattened or expanded. Hard breaks reset the
- * matcher, soft wraps do not. */
+ * overlapping matches. A query-sized ring finds match bounds. For counted
+ * navigation, retain at most n matches for a possible wrap: the first n
+ * forwards, or a ring of the last n backwards. The retained history is never
+ * flattened or expanded. Hard breaks reset the matcher, soft wraps do not. */
 static int
-searchscan(int direction, SearchPos pivot, int canwrap)
+searchscan(int direction, SearchPos pivot, int canwrap, int n)
 {
 	SearchPos positions[SEARCH_MAX], start, end;
-	SearchPos best = {0}, bestend = {0}, wrap = {0}, wrapend = {0};
+	struct SearchHit { SearchPos start, end; } single, best, *hits = &single;
 	Line line;
 	uint64_t top;
-	int y, x, width, matched = 0, slot = 0, havebest = 0, havewrap = 0;
-	int relative, better, total = sb_maxoffset() + term.row;
-	int count = 0, before = 0, upto = 0;
+	int y, x, width, matched = 0, slot = 0, havebest = 0;
+	int relative, total = sb_maxoffset() + term.row;
+	int count = 0, before = 0, upto = 0, after = 0;
+	int64_t index;
 
 	if (!search.active || !search.len)
 		return 0;
+	if (n > 1)
+		hits = xmalloc((size_t)n * sizeof(*hits));
 	for (y = 0; y < total; y++) {
 		line = viewline(y - (sb_maxoffset() - sb.view_offset));
 		width = tlinelen(line);
@@ -1175,41 +1201,44 @@ searchscan(int direction, SearchPos pivot, int canwrap)
 			end = (SearchPos){ sb.base + y,
 				MIN(term.col - 1, x + !!(line[x].mode & ATTR_WIDE)) };
 			count++;
-			before += searchcmp(start, pivot) < 0;
-			upto += searchcmp(start, pivot) <= 0;
-			relative = searchcmp(start, pivot) * direction;
-			better = !havebest || searchcmp(start, best) * direction < 0;
-			if (relative > 0 && better) {
-				best = start;
-				bestend = end;
+			relative = searchcmp(start, pivot);
+			before += relative < 0;
+			upto += relative <= 0;
+			if (direction < 0 || count <= n)
+				hits[(count - 1) % n] = (struct SearchHit){ start, end };
+			if (direction > 0 && relative > 0 && ++after == n) {
+				best = (struct SearchHit){ start, end };
 				havebest = 1;
-			}
-			if (!havewrap || searchcmp(start, wrap) * direction < 0) {
-				wrap = start;
-				wrapend = end;
-				havewrap = 1;
+			} else if (direction < 0 && relative < 0 && count >= n) {
+				best = hits[(count - n) % n];
+				havebest = 1;
 			}
 		}
 		if (!(line[term.col - 1].mode & ATTR_WRAP))
 			matched = 0;
 	}
-	if (!havebest && !canwrap)
+	if (!havebest && !canwrap) {
+		if (hits != &single)
+			free(hits);
 		return 0;
-	search.found = havebest || havewrap;
+	}
+	search.found = count > 0;
 	search.count = count;
-	/* The nearest match past the pivot, or wrapping, the first or last. */
-	if (direction < 0)
-		search.index = havebest ? before : count;
-	else
-		search.index = havebest ? upto + 1 : 1;
 	if (search.found) {
-		search.start = havebest ? best : wrap;
-		search.end = havebest ? bestend : wrapend;
+		index = direction < 0 ? before - (int64_t)n : upto + (int64_t)n - 1;
+		index = (index % count + count) % count;
+		search.index = index + 1;
+		if (!havebest)
+			best = hits[index % n];
+		search.start = best.start;
+		search.end = best.end;
 		/* Leave room for the prompt and context around the first row. */
 		top = search.start.row - MIN(search.start.row - sb.base,
 		                            (uint64_t)(term.row / 2));
 		searchview(top);
 	}
+	if (hits != &single)
+		free(hits);
 	tfulldirt();
 	return havebest;
 }
@@ -1222,7 +1251,7 @@ tsearchnext(int direction)
 	uint64_t top = search.originlive ? sb.base + sb_maxoffset() : searchtop();
 
 	searchscan(direction < 0 ? -1 : 1, search.found ? search.start :
-	           (SearchPos){ top + term.row - 1, term.col }, 1);
+	           (SearchPos){ top + term.row - 1, term.col }, 1, 1);
 }
 
 /* Find the nearest match above the rows in view, or below them, skipping
@@ -1234,10 +1263,10 @@ tsearchpage(int direction)
 	int found;
 
 	if (direction < 0)
-		found = searchscan(-1, (SearchPos){ searchtop(), -1 }, 0);
+		found = searchscan(-1, (SearchPos){ searchtop(), -1 }, 0, 1);
 	else
 		found = searchscan(1, (SearchPos){ searchtop() + term.row - 1,
-		                                   term.col }, 0);
+		                                   term.col }, 0, 1);
 	if (!found)
 		tsearchedge(direction > 0);
 }
@@ -1247,9 +1276,9 @@ void
 tsearchedge(int last)
 {
 	if (last)
-		searchscan(-1, (SearchPos){ UINT64_MAX, INT_MAX }, 1);
+		searchscan(-1, (SearchPos){ UINT64_MAX, INT_MAX }, 1, 1);
 	else
-		searchscan(1, (SearchPos){ 0, -1 }, 1);
+		searchscan(1, (SearchPos){ 0, -1 }, 1, 1);
 }
 
 void
@@ -1544,6 +1573,598 @@ urlwraps(int y)
 	Line line = viewline(y);
 
 	return line && line[term.col - 1].mode & ATTR_WRAP;
+}
+
+/* Absolute row of a view row and back, as for search positions. */
+static int
+vimy(uint64_t row)
+{
+	return (int)(row - sb.base) - (sb_maxoffset() - sb.view_offset);
+}
+
+static uint64_t
+vimlast(void)
+{
+	return sb.base + sb_maxoffset() + term.row - 1;
+}
+
+static uint64_t
+vimadd(uint64_t row, int n)
+{
+	if (n < 0 && row - sb.base < (uint64_t)-(int64_t)n)
+		return sb.base;
+	return row + n;
+}
+
+/* Follow rows moved by output, including both ends of a visual selection.
+ * Clip to the region when text can be lost at either margin. */
+static void
+vimscrollrows(uint64_t first, uint64_t last, int n, int clip)
+{
+	SearchPos *points[] = { &vim.pos, &vim.anchor };
+	int i;
+
+	if (!vim.mode)
+		return;
+	for (i = 0; i < (vim.mode > VIM_NORMAL ? 2 : 1); i++) {
+		if (!BETWEEN(points[i]->row, first, last))
+			continue;
+		points[i]->row = vimadd(points[i]->row, n);
+		if (clip)
+			LIMIT(points[i]->row, first, last);
+	}
+}
+
+/* Keep the cursor on a character and in view, and the selection on it. */
+static void
+vimupdate(void)
+{
+	uint64_t top;
+
+	LIMIT(vim.pos.row, sb.base, vimlast());
+	LIMIT(vim.pos.x, 0, term.col - 1);
+	top = searchtop();
+	if (vim.pos.row < top)
+		searchview(vim.pos.row);
+	else if (vim.pos.row >= top + term.row)
+		searchview(vim.pos.row - term.row + 1);
+	if (vim.pos.x > 0 && (viewline(vimy(vim.pos.row))[vim.pos.x].mode & ATTR_WDUMMY))
+		vim.pos.x--;
+	if (vim.mode > VIM_NORMAL) {
+		sel.mode = SEL_READY;
+		sel.alt = IS_SET(MODE_ALTSCREEN);
+		sel.type = vim.mode == VIM_BLOCK ? SEL_RECTANGULAR : SEL_REGULAR;
+		sel.snap = vim.mode == VIM_LINE ? SNAP_LINE : 0;
+		sel.ob.x = vim.anchor.x;
+		sel.ob.y = vimy(vim.anchor.row);
+		sel.oe.x = vim.pos.x;
+		sel.oe.y = vimy(vim.pos.row);
+		selnormalize();
+	}
+	tfulldirt();
+}
+
+/* Output, edits and history eviction can end a selection beneath the mode.
+ * Check before vimupdate(), which would otherwise bring it back. */
+static void
+vimvalidatesel(void)
+{
+	if (vim.mode > VIM_NORMAL && (sel.ob.x == -1 || vim.anchor.row < sb.base ||
+	    vim.anchor.row > vimlast())) {
+		selclear();
+		vim.mode = VIM_NORMAL;
+	}
+}
+
+static void
+vimvalidate(void)
+{
+	uint64_t top;
+
+	if (!vim.mode)
+		return;
+	vimvalidatesel();
+	if (search.active)
+		return;
+	top = searchtop();
+	if (vim.pos.row < top || vim.pos.row >= top + term.row || vim.pos.x >= term.col ||
+	    (vim.pos.x > 0 && (viewline(vimy(vim.pos.row))[vim.pos.x].mode & ATTR_WDUMMY)))
+		vimupdate();
+}
+
+/* Move to the neighboring character. Return 0 at the end of the text, 2
+ * after crossing a hard line break and otherwise 1. Only *line is usable
+ * afterwards, as decoding another row may reuse the row before it. */
+static int
+vimstep(SearchPos *p, Line *line, int direction)
+{
+	int hard = 0;
+
+	do {
+		p->x += direction;
+		if (BETWEEN(p->x, 0, term.col - 1))
+			continue;
+		if (direction > 0 ? p->row >= vimlast() : p->row <= sb.base)
+			return 0;
+		if (direction > 0)
+			hard |= !((*line)[term.col - 1].mode & ATTR_WRAP);
+		p->row += direction;
+		p->x = direction > 0 ? 0 : term.col - 1;
+		*line = viewline(vimy(p->row));
+		if (direction < 0)
+			hard |= !((*line)[term.col - 1].mode & ATTR_WRAP);
+	} while (!BETWEEN(p->x, 0, term.col - 1) ||
+	         ((*line)[p->x].mode & (ATTR_WDUMMY | ATTR_WPAD)));
+	return 1 + hard;
+}
+
+/* 0 for blanks and otherwise a word's class, as Vim's w and W see it. */
+static int
+vimclass(Rune u, int big)
+{
+	if (!u || u == ' ' || u == '\t')
+		return 0;
+	return big || u >= 0x80 || isalnum((int)u) || u == '_' ? 1 : 2;
+}
+
+/* w and W: the next word's start, staying put if there is none. */
+static int
+vimwordstart(int big)
+{
+	SearchPos p = vim.pos;
+	Line line = viewline(vimy(p.row));
+	int class = vimclass(line[p.x].u, big), next, step;
+
+	while ((step = vimstep(&p, &line, 1))) {
+		next = vimclass(line[p.x].u, big);
+		if (step == 2)
+			class = 0;
+		if (next && next != class) {
+			vim.pos = p;
+			return 1;
+		}
+		if (!next)
+			class = 0;
+	}
+	return 0;
+}
+
+/* e and E going forwards, b and B going backwards: the far end of this or
+ * the next word in that direction. */
+static int
+vimwordend(int direction, int big)
+{
+	SearchPos p = vim.pos, last;
+	Line line = viewline(vimy(p.row));
+	int class;
+
+	do {
+		if (!vimstep(&p, &line, direction))
+			return 0;
+	} while (!(class = vimclass(line[p.x].u, big)));
+	do
+		last = p;
+	while (vimstep(&p, &line, direction) == 1 &&
+	       vimclass(line[p.x].u, big) == class);
+	vim.pos = last;
+	return 1;
+}
+
+/* f, F, t and T within the logical line. A repeated t or T must get past
+ * the character it stopped before. */
+static int
+vimfind(Rune u, int direction, int till, int repeat)
+{
+	SearchPos p = vim.pos, last = p;
+	Line line = viewline(vimy(p.row));
+
+	if (repeat && till && vimstep(&p, &line, direction) != 1)
+		return 0;
+	if (repeat && till)
+		last = p;
+	while (vimstep(&p, &line, direction) == 1) {
+		if (line[p.x].u == u) {
+			vim.pos = till ? last : p;
+			return 1;
+		}
+		last = p;
+	}
+	return 0;
+}
+
+/* The first row of the logical line, or its last. */
+static void
+vimlogicalline(int direction)
+{
+	if (direction < 0) {
+		while (vim.pos.row > sb.base &&
+		       viewline(vimy(vim.pos.row - 1))[term.col - 1].mode & ATTR_WRAP)
+			vim.pos.row--;
+	} else {
+		while (vim.pos.row < vimlast() &&
+		       viewline(vimy(vim.pos.row))[term.col - 1].mode & ATTR_WRAP)
+			vim.pos.row++;
+	}
+}
+
+/* The first character on the cursor's row that is not blank. */
+static void
+vimnonblank(void)
+{
+	Line line = viewline(vimy(vim.pos.row));
+	int len = tlinelen(line);
+
+	for (vim.pos.x = 0; vim.pos.x < len; vim.pos.x++)
+		if (vimclass(line[vim.pos.x].u, 1))
+			return;
+	vim.pos.x = 0;
+}
+
+/* Move the view by n rows, and the cursor with it if it moves as well. */
+static void
+vimscroll(int n, int follow)
+{
+	uint64_t top;
+
+	searchview(vimadd(searchtop(), n));
+	top = searchtop();
+	if (follow)
+		vim.pos.row = vimadd(vim.pos.row, n);
+	LIMIT(vim.pos.row, top, top + term.row - 1);
+}
+
+/* n and N, including the full count, in one history scan. */
+static void
+vimsearchnext(int direction, int n)
+{
+	if (!search.len)
+		return;
+	search.active = 1;
+	searchscan(direction, vim.pos, 1, n);
+	if (search.found)
+		vim.pos = search.start;
+	search.active = search.found = 0;
+}
+
+/* End the mode, returning to the view it started from. */
+void
+tvimend(void)
+{
+	if (!vim.mode)
+		return;
+	if (vim.mode > VIM_NORMAL)
+		selclear();
+	vim.mode = 0;
+	searchview(vim.originlive ? sb.base + sb_maxoffset() : vim.origin);
+	tfulldirt();
+}
+
+/* Copy like the mouse and a URL click do. The selection stays, as after
+ * dragging, until something replaces it. */
+static void
+vimyank(void)
+{
+	char *text;
+	size_t len;
+
+	vimupdate();
+	if ((text = getsel())) {
+		/* Whole lines end in a newline, also those filling the width,
+		 * where getsel() sees no padding selected past the text. It
+		 * leaves room for one on every row. */
+		len = strlen(text);
+		if (vim.mode == VIM_LINE && (!len || text[len - 1] != '\n')) {
+			text[len] = '\n';
+			text[len + 1] = '\0';
+		}
+		xsetsel(text);
+		xclipcopy();
+	}
+	sel.mode = SEL_IDLE;
+	vim.mode = VIM_NORMAL;
+	tvimend();
+}
+
+/* Toggle a visual mode, or change to it from another one. */
+static void
+vimvisual(int mode)
+{
+	if (vim.mode == mode) {
+		selclear();
+		vim.mode = VIM_NORMAL;
+		return;
+	}
+	if (vim.mode == VIM_NORMAL) {
+		selclear();
+		vim.anchor = vim.pos;
+	}
+	vim.mode = mode;
+}
+
+/* yy and Y count logical lines, wherever the cursor sits in a wrap. */
+static void
+vimyanklines(int n)
+{
+	vimvisual(VIM_LINE);
+	while (--n > 0) {
+		vimlogicalline(1);
+		if (vim.pos.row == vimlast())
+			break;
+		vim.pos.row++;
+	}
+	vimyank();
+}
+
+/* The rest of a multi-key command. */
+static void
+vimpending(Rune pending, Rune u, int n)
+{
+	int direction = pending == 'f' || pending == 't' ? 1 : -1;
+	int till = pending == 't' || pending == 'T', i;
+
+	switch (pending) {
+	case 'g':
+		if (u != 'g')
+			return;
+		vim.pos.row = vimadd(sb.base, n - 1);
+		LIMIT(vim.pos.row, sb.base, vimlast());
+		vimnonblank();
+		break;
+	case 'y':
+		if (u != 'y')
+			return;
+		vimyanklines(n);
+		return;
+	default:
+		vim.find = u;
+		vim.findkind = pending;
+		for (i = 0; i < n && vimfind(u, direction, till, i > 0); i++)
+			;
+		break;
+	}
+}
+
+/* Handle a key, ctrl if it is a control key named by its lowercase letter.
+ * Return whether the window should open the search bar. */
+int
+tvimkey(Rune u, int ctrl)
+{
+	Rune pending = vim.pending;
+	int count = vim.count, n = count ? count : 1, i, direction, till;
+	int named = BETWEEN(u, VIM_LEFT, VIM_ENTER);
+	int half = MAX(1, term.row / 2);
+	int pagejump = MIN((int64_t)n * MAX(1, term.row - 2), INT_MAX);
+	uint64_t top;
+
+	if (!vim.mode)
+		return 0;
+	/* Translate after retaining the distinction from typed characters. */
+	switch (u) {
+	case VIM_LEFT: u = 'h'; break;
+	case VIM_DOWN: u = 'j'; break;
+	case VIM_UP: u = 'k'; break;
+	case VIM_RIGHT: u = 'l'; break;
+	case VIM_HOME: u = '0'; break;
+	case VIM_END: u = '$'; break;
+	case VIM_PAGEUP: u = 'b'; ctrl = 1; break;
+	case VIM_PAGEDOWN: u = 'f'; ctrl = 1; break;
+	case VIM_ENTER: u = '\r'; break;
+	}
+	vimvalidate();
+	vim.pending = 0;
+	if (u == VIM_ESCAPE && (pending || count)) {
+		vim.count = 0;
+		return 0;
+	}
+	if (u == VIM_ESCAPE) {
+		if (vim.mode > VIM_NORMAL) {
+			selclear();
+			vim.mode = VIM_NORMAL;
+		} else {
+			tvimend();
+		}
+		return 0;
+	}
+	if (pending && !ctrl && !named) {
+		vim.count = 0;
+		vimpending(pending, u, n);
+		if (vim.mode)
+			vimupdate();
+		return 0;
+	}
+	if (!ctrl && !named && (BETWEEN(u, '1', '9') || (u == '0' && count))) {
+		vim.count = MIN(count * 10 + (u - '0'), VIM_COUNT_MAX);
+		return 0;
+	}
+	vim.count = 0;
+	top = searchtop();
+
+	if (ctrl) {
+		switch (u) {
+		case 'b': vimscroll(-pagejump, 1); break;
+		case 'f': vimscroll(pagejump, 1); break;
+		case 'u': vimscroll(-(count ? n : half), 1); break;
+		case 'd': vimscroll(count ? n : half, 1); break;
+		case 'y': vimscroll(-n, 0); break;
+		case 'e': vimscroll(n, 0); break;
+		case 'v': vimvisual(VIM_BLOCK); break;
+		case 'c':
+			tvimend();
+			return 0;
+		default:
+			return 0;
+		}
+		vimupdate();
+		return 0;
+	}
+
+	switch (u) {
+	case 'h':
+		vim.pos.x -= MIN(n, term.col);
+		break;
+	case 'l':
+		for (i = MIN(n, term.col); i > 0 && vim.pos.x < term.col - 1; i--)
+			vim.pos.x += 1 + !!(viewline(vimy(vim.pos.row))[vim.pos.x].mode & ATTR_WIDE);
+		break;
+	case 'j':
+		vim.pos.row = vimadd(vim.pos.row, n);
+		break;
+	case 'k':
+		vim.pos.row = vimadd(vim.pos.row, -n);
+		break;
+	case 'w': case 'W':
+		for (; n > 0 && vimwordstart(u == 'W'); n--)
+			;
+		break;
+	case 'e': case 'E':
+		for (; n > 0 && vimwordend(1, u == 'E'); n--)
+			;
+		break;
+	case 'b': case 'B':
+		for (; n > 0 && vimwordend(-1, u == 'B'); n--)
+			;
+		break;
+	case '0':
+		vimlogicalline(-1);
+		vim.pos.x = 0;
+		break;
+	case '^':
+		vimlogicalline(-1);
+		vimnonblank();
+		break;
+	case '$':
+		vimlogicalline(1);
+		vim.pos.x = MAX(0, tlinelen(viewline(vimy(vim.pos.row))) - 1);
+		break;
+	case 'G':
+		if (count) {
+			vim.pos.row = vimadd(sb.base, n - 1);
+		} else {
+			/* The rows below the last output hold nothing to copy. */
+			vim.pos.row = vimlast();
+			while (vim.pos.row > sb.base &&
+			       !tlinelen(viewline(vimy(vim.pos.row))))
+				vim.pos.row--;
+		}
+		LIMIT(vim.pos.row, sb.base, vimlast());
+		vimnonblank();
+		break;
+	case 'H':
+		vim.pos.row = top + MIN(n - 1, term.row - 1);
+		vimnonblank();
+		break;
+	case 'M':
+		vim.pos.row = top + (term.row - 1) / 2;
+		vimnonblank();
+		break;
+	case 'L':
+		vim.pos.row = top + term.row - 1 - MIN(n - 1, term.row - 1);
+		vimnonblank();
+		break;
+	case 'g': case 'f': case 'F': case 't': case 'T':
+		vim.pending = u;
+		vim.count = count;
+		return 0;
+	case ';': case ',':
+		if (!vim.find)
+			break;
+		direction = vim.findkind == 'f' || vim.findkind == 't' ? 1 : -1;
+		till = vim.findkind == 't' || vim.findkind == 'T';
+		for (; n > 0 && vimfind(vim.find, u == ';' ? direction : -direction,
+		                        till, 1); n--)
+			;
+		break;
+	case '/':
+	case '?':
+		vim.searchdir = u == '/' ? 1 : -1;
+		return 1;
+	case 'n':
+		vimsearchnext(vim.searchdir, n);
+		break;
+	case 'N':
+		vimsearchnext(-vim.searchdir, n);
+		break;
+	case 'v':
+		vimvisual(VIM_VISUAL);
+		break;
+	case 'V':
+		vimvisual(VIM_LINE);
+		break;
+	case 'o':
+	case 'O':
+		if (vim.mode > VIM_NORMAL) {
+			SearchPos swap = vim.pos;
+
+			vim.pos = vim.anchor;
+			vim.anchor = swap;
+		}
+		break;
+	case 'y':
+	case '\r':
+		if (vim.mode > VIM_NORMAL)
+			vimyank();
+		else if (u == 'y') {
+			vim.pending = 'y';
+			vim.count = count;
+		}
+		return 0;
+	case 'Y':
+		if (vim.mode == VIM_NORMAL) {
+			vimyanklines(n);
+			return 0;
+		} else if (vim.mode == VIM_VISUAL) {
+			vim.mode = VIM_LINE;
+		}
+		vimyank();
+		return 0;
+	case 'q':
+	case 'i':
+	case 'a':
+		tvimend();
+		return 0;
+	default:
+		return 0;
+	}
+	vimupdate();
+	return 0;
+}
+
+void
+tvimstart(void)
+{
+	uint64_t top = searchtop();
+	int live = sb.view_offset == 0;
+
+	memset(&vim, 0, sizeof(vim));
+	vim.mode = VIM_NORMAL;
+	vim.searchdir = 1;
+	vim.origin = top;
+	vim.originlive = live;
+	vim.pos.row = top + (live ? term.c.y : term.row - 1);
+	vim.pos.x = live ? term.c.x : 0;
+	/* A drag in progress must not end by replacing what gets selected. */
+	if (sel.mode != SEL_IDLE)
+		selclear();
+	vimupdate();
+}
+
+int
+tvimactive(void)
+{
+	return vim.mode;
+}
+
+/* The view row of the cursor, and whether a cell of the view holds it. */
+int
+tvimrow(void)
+{
+	return vimy(vim.pos.row);
+}
+
+int
+tvimcursor(int x, int y)
+{
+	return vim.mode && !search.active && x == vim.pos.x && y == vimy(vim.pos.row);
 }
 
 /*
@@ -2938,6 +3559,7 @@ treset(void)
 	free(search.marks);
 	free(search.newmarks);
 	memset(&search, 0, sizeof(search));
+	memset(&vim, 0, sizeof(vim));
 	tresetstate();
 	sb_clear();
 	if (sel.ob.x != -1 && term.row > 0)
@@ -2958,9 +3580,12 @@ void
 tswapscreen(void)
 {
 	Line *tmp = term.line;
-	int alt = IS_SET(MODE_ALTSCREEN), top = sb_maxoffset() - sb.view_offset;
+	int alt = IS_SET(MODE_ALTSCREEN), top;
 
 	search.refresh = 1;
+	/* Absolute rows mean other text on the other screen. */
+	tvimend();
+	top = sb_maxoffset() - sb.view_offset;
 
 	if (!alt) {
 		linkref(term.c.attr.link, 1);
@@ -3072,6 +3697,9 @@ selscroll(int orig, int n)
 {
 	/* Screen rows orig..term.bot are these rows of the view. */
 	int top = orig + sb.view_offset, bot = term.bot + sb.view_offset;
+	uint64_t screen = sb.base + sb_maxoffset();
+
+	vimscrollrows(screen + orig, screen + term.bot, n, 1);
 
 	if (sel.ob.x == -1 || sel.alt != IS_SET(MODE_ALTSCREEN))
 		return;
@@ -3100,6 +3728,11 @@ static void
 selpushed(int oldoffset, int n, int delta)
 {
 	int bot = term.bot + oldoffset;
+	uint64_t screen = sb.base + sb.len - n; /* live edge before the push */
+
+	/* Scrolled rows keep their absolute positions; fixed rows below the
+	 * region advance with the new live edge. */
+	vimscrollrows(screen + term.bot + 1, screen + term.row - 1, n, 0);
 
 	if (sel.ob.x == -1 || sel.alt != IS_SET(MODE_ALTSCREEN))
 		return;
@@ -4507,6 +5140,12 @@ kscroll(const Arg *arg)
 	newstart = sb_view_start();
 
 	selscrollback(sb_startdelta(oldstart, newstart));
+	/* The wheel moves the view; the keyboard cursor stays inside it. */
+	if (vim.mode && !search.active) {
+		vimvalidatesel();
+		LIMIT(vim.pos.row, searchtop(), searchtop() + term.row - 1);
+		vimupdate();
+	}
 	redraw();
 }
 
@@ -5059,7 +5698,7 @@ tresize(int col, int row)
 		{ .cursor = main_cursor, .source_row = sb.len + main_cursor->y },
 		{ .cursor = &term.saved[0], .source_row = sb.len + term.saved[0].y }
 	};
-	int nmarks = 2, screen_start = 0, cursor_row, altshift = 0;
+	int nmarks = 2, screen_start = 0, cursor_row, altshift = 0, viewrow = 0;
 	Line *tmp, *oldalt = NULL;
 
 	urls.dirty = 1;
@@ -5071,6 +5710,8 @@ tresize(int col, int row)
 	if (col == term.col && row == term.row)
 		return;
 	search.refresh = 1;
+	if (vim.mode)
+		viewrow = vimy(vim.pos.row);
 	/* Reflow moves text between rows, so a selection would cover other text. */
 	selclear();
 
@@ -5243,6 +5884,15 @@ tresize(int col, int row)
 		term.c.x = 0;
 	}
 
+	/* Reflow invalidates absolute rows, so stay at the same place on screen. */
+	if (vim.mode) {
+		vim.mode = VIM_NORMAL;
+		vim.origin = searchtop();
+		vim.pos.row = searchtop() + MIN(MAX(viewrow, 0), term.row - 1);
+		if (!search.active)
+			vimupdate();
+	}
+
 	tfulldirt();
 	sb_view_changed();
 }
@@ -5277,6 +5927,7 @@ draw(void)
 		return;
 	searchvalidate();
 	searchmarks();
+	vimvalidate();
 	urlupdate();
 
 	/* adjust cursor position */
@@ -5288,7 +5939,7 @@ draw(void)
 		cx--;
 
 	drawregion(0, 0, term.col, term.row);
-	if (sb.view_offset == 0 && !search.active) {
+	if (sb.view_offset == 0 && !search.active && !vim.mode) {
 		xdrawcursor(cx, term.c.y, term.line[term.c.y][cx],
 		            term.ocx, term.ocy, term.line[term.ocy][term.ocx]);
 		term.ocx = cx;

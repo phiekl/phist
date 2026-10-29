@@ -40,7 +40,10 @@ static char lastcwd[16385];
 void xsetcwd(const char *s) { snprintf(lastcwd, sizeof(lastcwd), "%s", s ? s : ""); }
 int xsetcursor(int a) { return 0; }
 void xsetmode(int a, unsigned int b) {}
-void xsetsel(char *s) {}
+#ifndef XSETSEL
+#define XSETSEL(s) /* tests may keep the text, which they then own */
+#endif
+void xsetsel(char *s) { XSETSEL(s); }
 void xximspot(int a, int b) {}
 
 static void

@@ -156,6 +156,19 @@ int tsearchcount(int *); /* -1 when output invalidated the last result */
 /* What tsearchmatch() returns for a cell in a match. */
 enum { SEARCH_OTHER = 1, SEARCH_CURRENT = 2 };
 int tsearchmatch(int, int);
+/* The modes of keyboard selection, and the key that leaves each. */
+enum { VIM_NORMAL = 1, VIM_VISUAL, VIM_LINE, VIM_BLOCK, VIM_ESCAPE = 0x1b };
+/* Named keys are motions, never characters for counts or f/t commands. */
+enum {
+	VIM_LEFT = 0x110000, VIM_DOWN, VIM_UP, VIM_RIGHT, VIM_HOME, VIM_END,
+	VIM_PAGEUP, VIM_PAGEDOWN, VIM_ENTER
+};
+void tvimstart(void);
+void tvimend(void);
+int tvimkey(Rune, int);
+int tvimactive(void);
+int tvimrow(void);
+int tvimcursor(int, int);
 
 /* config.h globals */
 extern char *utmp;

@@ -76,6 +76,9 @@ static void searchstart(const Arg *);
 static void searchinsert(const char *, size_t);
 static int searchkey(KeySym, uint, const char *, int);
 static void searchdraw(void);
+static void vimstart(const Arg *);
+static int vimkey(KeySym, uint, const char *, int);
+static void vimdraw(void);
 static int urlboxmouse(XEvent *);
 static int urlboxkey(KeySym, uint);
 static void urlboxdraw(void);
@@ -299,7 +302,7 @@ xunderlinepixel(uint32_t rgb, unsigned long fallback)
 }
 static XSelection xsel;
 static TermWindow win;
-static uint mouseignored; /* buttons pressed under the paste dialog */
+static uint mouseignored; /* buttons whose releases belong to a modal UI */
 static uint mousepasting; /* paste bindings pressed under its failure box */
 
 /* Font Ring Cache */
@@ -992,6 +995,134 @@ searchdraw(void)
 	pasteshift = 0;
 }
 
+/* Whether the bar with keyboard selection's mode shows. */
+static int vimbar;
+
+/* Keyboard selection takes every key, with those of Vim's own meaning
+ * translated here; st.c does the rest. Only font bindings still work. */
+static void
+vimstart(const Arg *arg)
+{
+	(void)arg;
+	pasteclear();
+	urlboxclose();
+	/* Discard a mouse gesture begun before keyboard selection took over. */
+	mouseignored |= MOUSE_BUTTONS;
+	mousepasting = 0;
+	free(urlclick.text);
+	memset(&urlclick, 0, sizeof(urlclick));
+	tvimstart();
+	vimbar = 1;
+	redraw();
+}
+
+static int
+vimkey(KeySym key, uint state, const char *text, int len)
+{
+	Shortcut *bp;
+	uint mods = state & ~(ignoremod | LockMask);
+	KeySym lower = key >= XK_A && key <= XK_Z ? key + XK_a - XK_A : key;
+	Rune u = 0;
+	int ctrl = 0, ctrlv, mode = tvimactive();
+
+	if (!tvimactive() || tsearchactive() || pastemodal())
+		return 0;
+	/* Pressing Shift or Ctrl alone is not yet another key. */
+	if (!IsModifierKey(key)) {
+		ctrlv = lower == XK_v && mods == ControlMask;
+		if (vimbar && !ctrlv) {
+			vimbar = 0;
+			redraw();
+		}
+		vimbar = ctrlv;
+	}
+	for (bp = shortcuts; bp < shortcuts + LEN(shortcuts); bp++) {
+		if ((key != bp->keysym && lower != bp->keysym) ||
+		    !match(bp->mod, state & ~LockMask))
+			continue;
+		if (bp->func == zoom || bp->func == zoomreset) {
+			bp->func(&bp->arg);
+			return 1;
+		}
+	}
+	if (mods & (Mod1Mask | Mod4Mask))
+		return 1;
+	switch (key) {
+	case XK_Escape: u = VIM_ESCAPE; break;
+	case XK_Return: case XK_KP_Enter: u = VIM_ENTER; break;
+	case XK_Left: case XK_KP_Left: u = VIM_LEFT; break;
+	case XK_Down: case XK_KP_Down: u = VIM_DOWN; break;
+	case XK_Up: case XK_KP_Up: u = VIM_UP; break;
+	case XK_Right: case XK_KP_Right: u = VIM_RIGHT; break;
+	case XK_Home: case XK_KP_Home: u = VIM_HOME; break;
+	case XK_End: case XK_KP_End: u = VIM_END; break;
+	case XK_Prior: case XK_KP_Prior: u = VIM_PAGEUP; break;
+	case XK_Next: case XK_KP_Next: u = VIM_PAGEDOWN; break;
+	/* A dead key on many layouts, without text of its own. */
+	case XK_dead_circumflex: u = '^'; break;
+	}
+	if (!u && (mods & ControlMask)) {
+		if (lower == XK_bracketleft)
+			u = VIM_ESCAPE;
+		else if (BETWEEN(lower, XK_a, XK_z))
+			u = lower, ctrl = 1;
+		else
+			return 1;
+	}
+	if (!u && (!len || !pasteutf8(text, len, &u)))
+		return 1;
+	if (tvimkey(u, ctrl)) {
+		searchstart(NULL);
+	} else {
+		if (tvimactive() != mode)
+			vimbar = 1;
+		redraw();
+	}
+	return 1;
+}
+
+/* A strip across the window, fading from alpha at the left. */
+static void
+vimfade(unsigned int rgb, unsigned short alpha, int y, int h)
+{
+	XRenderColor from = rgbvalue(rgb), to = from;
+
+	from.alpha = alpha;
+	to.alpha = alpha * MAX(0, MIN(1, vimlabelfadeopacity));
+	rgbfade(&from, &to, 0, win.w, y, h);
+}
+
+/* A tint over the window while the mode lasts, under any search bar. The bar
+ * with the mode's name is as tall as that one, and follows Ctrl+V or a change
+ * of mode until the next key. */
+static void
+vimdraw(void)
+{
+	static const char *const names[] = {
+		[VIM_NORMAL] = " NORMAL ", [VIM_VISUAL] = " VISUAL ",
+		[VIM_LINE] = " V-LINE ", [VIM_BLOCK] = " V-BLOCK ",
+	};
+	int cols = win.tw / win.cw, rows = win.th / win.ch, mode = tvimactive();
+	int ft, b, h, top;
+	XRenderColor tint = rgbvalue(vimtintcolor);
+
+	if (!mode || pastemodal())
+		return;
+	pasteblend(&tint, MAX(0, MIN(1, vimtintopacity)) * 0xffff, 0, 0, win.w, win.h);
+	if (!vimbar || tsearchactive() || cols < 1 || rows < 1)
+		return;
+	searchbarsize(&ft, &b, &h);
+	top = win.h - h;
+	vimfade(vimlabelcolor, 0xffff, top, h);
+	/* An outline on the side facing the terminal. */
+	if (top)
+		vimfade(vimlabeloutlinecolor, 0x9000, top - 1, 1);
+	pasteshift = top + b + ft - borderpx;
+	pastedrawline(names[mode], 0, 0, MIN(cols, (int)strlen(names[mode])),
+	              rgbcolor(vimlabeltextcolor));
+	pasteshift = 0;
+}
+
 void
 zoom(const Arg *arg)
 {
@@ -1122,6 +1253,8 @@ bpress(XEvent *e)
 	struct timespec now;
 	int snap;
 
+	/* A fresh press starts a new gesture, even if an old release was lost. */
+	mouseignored &= ~buttonmask(btn);
 	if (urlboxmouse(e))
 		return;
 	/* The wheel scrolls history, also beneath alternate-screen programs
@@ -1131,7 +1264,7 @@ bpress(XEvent *e)
 		a.i = MAX(1, mousescrolllines);
 		xsel.clicks = 0;
 		/* Not even its release reaches a binding beneath them. */
-		if (pastemodal() || tsearchactive())
+		if (pastemodal() || tsearchactive() || tvimactive())
 			mouseignored |= buttonmask(btn);
 		if (pastewheel(btn == Button4 ? -a.i : a.i))
 			return;
@@ -1158,7 +1291,7 @@ bpress(XEvent *e)
 		}
 		return;
 	}
-	if (tsearchactive()) {
+	if (tsearchactive() || tvimactive()) {
 		mouseignored |= buttonmask(btn);
 		return;
 	}
@@ -3313,7 +3446,7 @@ vbellrender(double progress)
 	int bell = vbellset && depth >= 1 && vbellwidth && vbellopacity > 0 &&
 	           (!vbellanimated() || progress < 1);
 
-	if (!bell && !pastemodal() && !tsearchactive() && !urlbox.text)
+	if (!bell && !pastemodal() && !tsearchactive() && !urlbox.text && !tvimactive())
 		return xw.buf;
 	progress = MAX(0, MIN(1, progress));
 	if (!vbell.buf) {
@@ -3331,6 +3464,9 @@ vbellrender(double progress)
 	XCopyArea(xw.dpy, xw.buf, vbell.buf, dc.gc, 0, 0, win.w, win.h, 0, 0);
 	draw = xw.draw;
 	xw.draw = vbell.draw;
+	/* The tint goes first, under the search bar and any dialog. */
+	if (tvimactive())
+		vimdraw();
 	if (tsearchactive())
 		searchdraw();
 	/* Both overlays share the presentation pixmap. The terminal buffer
@@ -3466,6 +3602,8 @@ xdrawline(Line line, int x1, int y1, int x2)
 			new.mode |= ATTR_URL;
 		if (selected(x, y1))
 			new.mode ^= ATTR_REVERSE;
+		if (tvimcursor(x, y1))
+			new.mode ^= ATTR_REVERSE;
 		if ((match = tsearchmatch(x, y1))) {
 			new.fg = rgbtruecolor(match == SEARCH_CURRENT ? searchmatchtextcolor :
 			                      searchothermatchtextcolor);
@@ -3508,8 +3646,10 @@ xfinishdraw(void)
 	/* If the overlay could not be set up, reuse the terminal's drawing
 	 * context on the window. A modal dialog must stay visible, and drawing
 	 * it here still leaves the terminal buffer clean for the next frame. */
-	if (frame == xw.buf && (pastemodal() || tsearchactive() || urlbox.text)) {
+	if (frame == xw.buf && (pastemodal() || tsearchactive() || urlbox.text ||
+	                        tvimactive())) {
 		XftDrawChange(xw.draw, xw.win);
+		vimdraw();
 		searchdraw();
 		pastedraw();
 		urlboxdraw();
@@ -3704,6 +3844,9 @@ kpress(XEvent *ev)
 	} else {
 		len = XLookupString(e, buf, sizeof buf, &ksym, NULL);
 	}
+	/* Before the shortcuts: Ctrl+V selects a block here. */
+	if (vimkey(ksym, e->state, buf, len))
+		return;
 	lower = ksym >= XK_A && ksym <= XK_Z ? ksym + XK_a - XK_A : ksym;
 	mods = e->state & ~(ignoremod | LockMask);
 	if (urlboxkey(ksym, e->state))
@@ -3712,20 +3855,23 @@ kpress(XEvent *ev)
 		return;
 	if (searchkey(ksym, e->state, buf, len))
 		return;
-	/* 1. shortcuts */
+	/* 1. shortcuts, also with Caps Lock, which reports Ctrl+V as XK_V */
 	for (bp = shortcuts; bp < shortcuts + LEN(shortcuts); bp++) {
-		if (ksym == bp->keysym && match(bp->mod, e->state)) {
+		/* Keyboard selection may interrupt any held mouse button. */
+		uint state = e->state & ~(LockMask | (bp->func == vimstart ? MOUSE_BUTTONS : 0));
+		if ((ksym == bp->keysym || lower == bp->keysym) &&
+		    match(bp->mod, state)) {
 			bp->func(&(bp->arg));
 			return;
 		}
 	}
-
-	/* Honor configured shortcuts first; suppress unbound disabled keys. */
+	/* Honor configured shortcuts first, but keep disabled, unbound keys
+	 * from falling through as control bytes or terminal mappings. */
 	if (ksym == XK_Break || ksym == XK_Print ||
-	    (lower == XK_v &&
-	     (mods == ControlMask || mods == (ControlMask | ShiftMask))) ||
 	    (mods == (ControlMask | ShiftMask) &&
-	     (lower == XK_c || lower == XK_y || ksym == XK_Num_Lock)))
+	     (lower == XK_v || lower == XK_c || lower == XK_y ||
+	      ksym == XK_Num_Lock)) ||
+	    (lower == XK_v && mods == ControlMask))
 		return;
 
 	/* 2. custom keys from config.h */

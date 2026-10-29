@@ -10,10 +10,11 @@ screen; a selection remains attached to its text. Protocol replies use a
 separate path, so cursor-position queries leave the history view in place.
 OSC color replies are not locally echoed.
 
-Ctrl+V, Ctrl+Shift+V, Ctrl+Shift+C, Ctrl+Shift+Y, Ctrl+Shift+Num Lock,
-Break and Print Screen (with any modifiers) are ignored when unbound.
-Bindings configured in `shortcuts` still take precedence. Shift+Insert
-pastes from PRIMARY.
+Ctrl+Shift+V, Ctrl+Shift+C, Ctrl+Shift+Y, Ctrl+Shift+Num Lock, Break and
+Print Screen (with any modifiers) are ignored when unbound. Bindings
+configured in `shortcuts` still take precedence. Ctrl+V starts [keyboard
+selection](selection.md#keyboard-selection), so programs never receive it.
+Shift+Insert pastes from PRIMARY.
 
 Run `LC_ALL=C.UTF-8 sh tests/replies.sh` for reply and empty/nonempty-input
 regressions. History selection behavior is also covered by
