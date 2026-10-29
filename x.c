@@ -321,7 +321,11 @@ typedef struct {
 	int color; /* a color font, cached for text only when nothing else had unicodep */
 } Fontcache;
 
-/* Fontcache is an array now. A new font will be appended to the array. */
+/* Fallback lookup scans this array, so clear it at FRC_MAX between glyph runs.
+ * Keep uncovered characters in a separate table to avoid filling the font cache;
+ * a collision in that table can require another font search. */
+enum { FRC_MAX = 1024, FRC_UNCOVERED = -2, UNCOVERED_BITS = 14 };
+static uint32_t uncovered[1 << UNCOVERED_BITS]; /* see xuncoveredkey() */
 enum { CELL_MAX = 4096 }; /* largest font ascent or descent, in pixels */
 static Fontcache *frc = NULL;
 static int frclen = 0;
@@ -2138,6 +2142,27 @@ xunloadfont(Font *f)
 	f->set = f->textset = NULL;
 }
 
+static void
+xclearfontcache(void)
+{
+	while (frclen > 0)
+		XftFontClose(xw.dpy, frc[--frclen].font);
+	memset(uncovered, 0, sizeof(uncovered));
+}
+
+/* Reserve zero for an empty uncovered slot. */
+static uint32_t
+xuncoveredkey(int frcflags, Rune rune)
+{
+	return ((uint32_t)frcflags << 21 | rune) + 1;
+}
+
+static uint32_t *
+xuncoveredslot(uint32_t key)
+{
+	return &uncovered[key * 2654435761u >> (32 - UNCOVERED_BITS)];
+}
+
 void
 xunloadfonts(void)
 {
@@ -2150,9 +2175,7 @@ xunloadfonts(void)
 		emoji[i].loaded = 0;
 	}
 
-	/* Free the loaded fonts in the font cache.  */
-	while (frclen > 0)
-		XftFontClose(xw.dpy, frc[--frclen].font);
+	xclearfontcache();
 
 	xunloadfont(&dc.font);
 	xunloadfont(&dc.bfont);
@@ -2360,6 +2383,10 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 	FcBool color;
 	int i, f, numspecs = 0;
 
+	/* Specs refer to cached fonts until drawn, so only start over between runs. */
+	if (frclen >= FRC_MAX)
+		xclearfontcache();
+
 	for (i = 0, xp = winx, yp = winy + font->ascent; i < len; ++i) {
 		/* Fetch rune and mode for current glyph. */
 		rune = glyphs[i].u;
@@ -2422,8 +2449,12 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 			continue;
 		}
 
+		/* A character known to be in no font needs no search. */
+		f = *xuncoveredslot(xuncoveredkey(frcflags, rune)) ==
+		    xuncoveredkey(frcflags, rune) ? FRC_UNCOVERED : 0;
+
 		/* Fallback on font cache, search the font cache for match. */
-		for (f = 0; f < frclen; f++) {
+		for (; f >= 0 && f < frclen; f++) {
 			/* Other characters may have a non-color fallback to find. */
 			if ((frcflags & FRC_TEXT) && frc[f].color && frc[f].unicodep != rune)
 				continue;
@@ -2431,11 +2462,6 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 			/* Everything correct. */
 			if (glyphidx && frc[f].flags == frcflags)
 				break;
-			/* We got a default font for a not found glyph. */
-			if (!glyphidx && frc[f].flags == frcflags
-					&& frc[f].unicodep == rune) {
-				break;
-			}
 		}
 
 		/* Nothing was found. Use fontconfig to find matching font. */
@@ -2486,11 +2512,27 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 
 			glyphidx = XftCharIndex(xw.dpy, frc[frclen].font, rune);
 
-			f = frclen;
-			frclen++;
+			if (glyphidx) {
+				f = frclen;
+				frclen++;
+			} else {
+				XftFontClose(xw.dpy, frc[frclen].font);
+				*xuncoveredslot(xuncoveredkey(frcflags, rune)) =
+					xuncoveredkey(frcflags, rune);
+				f = FRC_UNCOVERED;
+			}
 
 			FcPatternDestroy(fcpattern);
 			FcCharSetDestroy(fccharset);
+		}
+		if (f == FRC_UNCOVERED) {
+			specs[numspecs].font = font->match;
+			specs[numspecs].glyph = 0;
+			specs[numspecs].x = (short)xp;
+			specs[numspecs].y = (short)yp;
+			xp += runewidth;
+			numspecs++;
+			continue;
 		}
 
 		specs[numspecs].font = frc[f].font;

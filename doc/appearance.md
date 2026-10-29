@@ -117,6 +117,18 @@ Run `LC_ALL=C.UTF-8 sh tests/emoji.sh` and `LC_ALL=C.UTF-8 sh
 tests/presentation.sh`. They check coverage, selectors, fallback choice,
 missing fonts, fitting, styles, cache reuse and alignment.
 
+## Fallback fonts
+
+Characters missing from the primary font use a fallback found through
+Fontconfig and kept in a cache, which is emptied when it reaches 1,024 entries,
+or on zoom, and refills as text is drawn. A character that no font covers is
+drawn as the primary font's missing glyph and tracked in a separate
+16,384-slot table. These characters do not fill the font cache; repeated
+lookups avoid a font search unless another character replaces their slot.
+
+`LC_ALL=C.UTF-8 sh tests/emoji.sh` checks the limit with a flood of uncovered
+characters.
+
 ## Visual bell
 
 The visual bell blends an animation over the current terminal content. Try

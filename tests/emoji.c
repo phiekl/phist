@@ -4,6 +4,8 @@
 #include "../x.c"
 #undef main
 
+enum { UNCOVERED = 0x100000 }; /* no font has this character or later ones */
+enum { FALLBACKONLY = 0xF0000 }; /* the fallback found for it has these */
 static XftFont textfonts[4], fallbackfont, monofont;
 static int available = 1, fixedsize, failopen, loads, livefonts, ascii_queries;
 
@@ -70,6 +72,10 @@ XftFontClose(Display *d, XftFont *font)
 FT_UInt
 XftCharIndex(Display *d, XftFont *font, FcChar32 rune)
 {
+	if (rune >= UNCOVERED)
+		return 0;
+	if (rune >= FALLBACKONLY)
+		return istextfont(font) ? 0 : 6;
 	if (font == &fallbackfont)
 		return 2;
 	if (font == &monofont)
@@ -103,6 +109,7 @@ setup(void)
 		frc = calloc(1, sizeof(*frc));
 	frccap = frclen = 1;
 	frc[0] = (Fontcache){ .font = &fallbackfont, .flags = FRC_NORMAL };
+	memset(uncovered, 0, sizeof(uncovered));
 	borderpx = 0;
 	win.cw = 8;
 	win.tw = 80 * win.cw;
@@ -127,7 +134,7 @@ int
 main(void)
 {
 	FcConfig *config = FcConfigCreate();
-	XftGlyphFontSpec s, specs[5];
+	XftGlyphFontSpec s, specs[5], specs32[32];
 	Glyph mixed[] = {
 		{.u = 'A'}, {.u = 0x263A, .mode = ATTR_ALTPRES}, {.u = 0x1F600, .mode = ATTR_WIDE},
 		{.u = 0, .mode = ATTR_WDUMMY}, {.u = 0x4E2D}, {.u = 'B'}
@@ -293,9 +300,49 @@ main(void)
 	assert(spec(0x263A, ATTR_ALTPRES).font == &textfonts[0] && !loads);
 	emojifont = "";
 	assert(spec(0x263A, ATTR_ALTPRES).font == &textfonts[0] && !loads);
+
+	/* Characters no font covers cannot grow the cache without end. */
+	setup();
+	dc.font.set = FcFontSetCreate();
+	FcFontSetAdd(dc.font.set, FcNameParse((const FcChar8 *)"Fallback:pixelsize=13"));
+	before = frclen;
+	for (i = 0; i < 3 * FRC_MAX + 1; i++) {
+		s = spec(UNCOVERED + i, 0);
+		assert(s.font == &textfonts[0] && !s.glyph);
+		assert(frclen == before && !livefonts);
+	}
+	/* They are not searched for again each time they are drawn. */
+	loads = 0;
+	for (i = 0; i < 3 * FRC_MAX + 1; i++)
+		assert(spec(UNCOVERED + i, 0).font == &textfonts[0]);
+	assert(!loads);
+	/* Each style looks for itself, and zooming starts over. */
+	dc.bfont.set = FcFontSetCreate();
+	FcFontSetAdd(dc.bfont.set, FcNameParse((const FcChar8 *)"Fallback:pixelsize=13"));
+	assert(spec(UNCOVERED, ATTR_BOLD).font == &textfonts[2] && loads == 1);
+	xclearfontcache();
+	assert(spec(UNCOVERED, 0).font == &textfonts[0] && loads == 2);
+	/* A full cache starts over, but not while a row still uses its fonts. */
+	{
+		Glyph row[32];
+
+		frc = xrealloc(frc, FRC_MAX * sizeof(*frc));
+		frccap = FRC_MAX;
+		for (frclen = 0; frclen < FRC_MAX - 1; frclen++)
+			frc[frclen] = (Fontcache){ .font = &monofont, .flags = FRC_ITALIC };
+		for (i = 0; i < LEN(row); i++)
+			row[i] = (Glyph){ .u = FALLBACKONLY + i };
+		assert(xmakeglyphfontspecs(specs32, row, LEN(row), 0, 0) == LEN(row));
+		assert(frclen == FRC_MAX);
+		for (i = 0; i < LEN(row); i++)
+			assert(specs32[i].font == frc[FRC_MAX - 1].font && specs32[i].glyph == 6);
+		assert(xmakeglyphfontspecs(specs32, row, LEN(row), 0, 0) == LEN(row));
+		assert(frclen == 1);
+	}
+
 	xunloadfonts();
 	assert(!livefonts);
 	free(frc);
-	puts("PASS: emoji font priority, presentation selection, primary/fallback preservation, styles, cell fitting, alignment, optional fonts and zoom cache cleanup");
+	puts("PASS: emoji font priority, presentation selection, primary/fallback preservation, styles, cell fitting, alignment, optional fonts, zoom cache cleanup and the fallback cache limit");
 	return 0;
 }
