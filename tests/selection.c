@@ -361,6 +361,28 @@ main(void)
 		free(line);
 	}
 
-	puts("PASS: regex selection expansion, paths, phrases, UTF-8, wrapping, history, dragging, alternate screen, reflow, long lines");
+	/* Coordinates outside the screen select from its nearest cell. */
+	{
+		int snaps[] = { 0, SNAP_WORD, SNAP_LINE, SNAP_REGEX };
+		char *got;
+		size_t i;
+
+		reset(10, 3);
+		put("0123456789abc");
+		for (i = 0; i < LEN(snaps); i++) {
+			selstart(10, 3, snaps[i]);
+			assert(sel.ob.x == 9 && sel.ob.y == 2);
+			selstart(-1, -1, snaps[i]);
+			assert(sel.ob.x == 0 && sel.ob.y == 0);
+			selextend(99, 99, SEL_REGULAR, 0);
+			selextend(99, 99, SEL_REGULAR, 1);
+			assert(sel.oe.x == 9 && sel.oe.y == 2);
+			got = getsel();
+			assert(got && !strncmp(got, "0123456789abc", 13));
+			free(got);
+		}
+	}
+
+	puts("PASS: regex selection expansion, paths, phrases, UTF-8, wrapping, history, dragging, alternate screen, reflow, long lines, coordinates off the screen");
 	return 0;
 }

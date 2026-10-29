@@ -2639,6 +2639,10 @@ selstart(int col, int row, int snap)
 	int had = sel.ob.x != -1 && sel.alt == IS_SET(MODE_ALTSCREEN);
 	int bx = sel.nb.x, by = sel.nb.y, ex = sel.ne.x, ey = sel.ne.y;
 
+	/* Snapping reads the cell at these coordinates. */
+	LIMIT(col, 0, term.col - 1);
+	LIMIT(row, 0, term.row - 1);
+
 	selclear();
 	sel.mode = SEL_EMPTY;
 	sel.type = SEL_REGULAR;
@@ -2667,6 +2671,9 @@ selextend(int col, int row, int type, int done)
 		selclear();
 		return;
 	}
+
+	LIMIT(col, 0, term.col - 1);
+	LIMIT(row, 0, term.row - 1);
 
 	oldey = sel.oe.y;
 	oldex = sel.oe.x;

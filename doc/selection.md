@@ -36,6 +36,10 @@ selected rows across a margin, the selection is cleared. Selections
 otherwise follow their text through history, screen switches and typing;
 resizing ends them because text can reflow between rows.
 
+Selection endpoints are clamped to the nearest screen cell before word
+or line snapping. A column just beyond the right edge therefore cannot
+read past the row.
+
 Run `LC_ALL=C.UTF-8 sh tests/selection.sh` for terminal and mouse checks,
 including these movement rules and multi-click expansion.
 
