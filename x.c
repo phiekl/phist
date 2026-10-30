@@ -328,6 +328,7 @@ enum { FRC_MAX = 1024, FRC_UNCOVERED = -2, UNCOVERED_BITS = 14 };
 static uint32_t uncovered[1 << UNCOVERED_BITS]; /* see xuncoveredkey() */
 /* The largest cell size, and font ascent or descent, in pixels. */
 enum { CELL_MAX = 4096 };
+enum { CELLS_MAX = 4 << 20 }; /* of a screen, at 16 bytes each on two screens */
 static Fontcache *frc = NULL;
 static int frclen = 0;
 static int frccap = 0;
@@ -1702,12 +1703,13 @@ bmotion(XEvent *e)
 }
 
 /* Keep every cell in the coordinates of X requests, which are 16-bit and
- * signed, however large a window or -g asks for. */
+ * signed, and the screens to a sane size, however large a window or -g asks. */
 static void
 xlimitcells(int *col, int *row)
 {
 	*col = MAX(1, MIN(*col, (SHRT_MAX - 2 * borderpx) / win.cw));
 	*row = MAX(1, MIN(*row, (SHRT_MAX - 2 * borderpx) / win.ch));
+	*row = MIN(*row, CELLS_MAX / *col);
 }
 
 void
@@ -2281,6 +2283,25 @@ xicdestroy(XIC xim, XPointer client, XPointer call)
 	return 1;
 }
 
+/* Connect and load the fonts, whose size limits the terminal's. */
+static void
+xopenfonts(void)
+{
+	if (!(xw.dpy = XOpenDisplay(NULL)))
+		die("can't open display\n");
+	xerrorprev = XSetErrorHandler(xerror);
+	xw.scr = XDefaultScreen(xw.dpy);
+	xw.vis = XDefaultVisual(xw.dpy, xw.scr);
+	xw.colormapped = xw.vis->class != TrueColor;
+
+	if (!FcInit())
+		die("could not init fontconfig.\n");
+
+	usedfont = (opt_font == NULL)? font : opt_font;
+	if (xloadfonts(usedfont, 0))
+		die("can't use font %s: unusable metrics\n", usedfont);
+}
+
 void
 xinit(int cols, int rows)
 {
@@ -2290,27 +2311,11 @@ xinit(int cols, int rows)
 	pid_t thispid = getpid();
 	XColor xmousefg, xmousebg;
 
-	if (!(xw.dpy = XOpenDisplay(NULL)))
-		die("can't open display\n");
-	xerrorprev = XSetErrorHandler(xerror);
-	xw.scr = XDefaultScreen(xw.dpy);
-	xw.vis = XDefaultVisual(xw.dpy, xw.scr);
-	xw.colormapped = xw.vis->class != TrueColor;
-
-	/* font */
-	if (!FcInit())
-		die("could not init fontconfig.\n");
-
-	usedfont = (opt_font == NULL)? font : opt_font;
-	if (xloadfonts(usedfont, 0))
-		die("can't use font %s: unusable metrics\n", usedfont);
-
 	/* colors */
 	xw.cmap = XDefaultColormap(xw.dpy, xw.scr);
 	xloadcols();
 
-	/* adjust fixed window geometry; run() resizes the terminal to match */
-	xlimitcells(&cols, &rows);
+	/* adjust fixed window geometry */
 	win.w = 2 * borderpx + cols * win.cw;
 	win.h = 2 * borderpx + rows * win.ch;
 	if (xw.gm & XNegative)
@@ -4244,6 +4249,8 @@ usage(void)
 int
 main(int argc, char *argv[])
 {
+	int col, row;
+
 	xw.l = xw.t = 0;
 	xw.isfixed = False;
 	xsetcursor(cursorstyle);
@@ -4304,13 +4311,13 @@ run:
 
 	setlocale(LC_CTYPE, "");
 	XSetLocaleModifiers("");
-	cols = MAX(cols, 1);
-	rows = MAX(rows, 1);
-	/* The cell size, which limits these further, is not known yet. */
-	cols = MIN(cols, SHRT_MAX);
-	rows = MIN(rows, SHRT_MAX);
-	tnew(cols, rows);
-	xinit(cols, rows);
+	xopenfonts();
+	/* Nothing is allocated for the terminal before its size is limited. */
+	col = MIN(cols, SHRT_MAX);
+	row = MIN(rows, SHRT_MAX);
+	xlimitcells(&col, &row);
+	tnew(col, row);
+	xinit(col, row);
 	xsetenv();
 	selinit();
 	run();

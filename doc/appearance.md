@@ -138,8 +138,10 @@ never added up. A primary font without usable metrics is refused when phist
 starts, an emoji font without them is not used, and zooming to a size that
 would be outside these limits keeps the current size. X coordinates are
 16-bit, so columns and rows stop at what fits in 32,767 pixels, whatever
-size the window or `-g` asks for; a larger window has blank space beyond
-them.
+size the window or `-g` asks for, and the screen stops at 4,194,304 cells in
+total, about 128 MiB for the two screens. A larger window has blank space
+beyond them. These limits apply before the terminal allocates anything for
+`-g`.
 `LC_ALL=C.UTF-8 sh tests/emoji.sh` checks these limits.
 
 ## Fallback fonts

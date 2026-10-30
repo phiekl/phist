@@ -515,8 +515,19 @@ main(void)
 		borderpx = 2;
 		col = row = 100000;
 		xlimitcells(&col, &row);
-		assert(col == 4095 && row == 2047);
+		/* Rows also stop at the budget of cells. */
+		assert(col == 4095 && row == CELLS_MAX / 4095);
 		assert(2 + col * win.cw <= SHRT_MAX && 2 + row * win.ch <= SHRT_MAX);
+		col = 1;
+		row = 100000;
+		xlimitcells(&col, &row);
+		assert(col == 1 && row == 2047); /* within the budget */
+		win.cw = win.ch = 1;
+		col = row = SHRT_MAX;
+		xlimitcells(&col, &row);
+		assert(col == SHRT_MAX - 4 && col * row <= CELLS_MAX && row >= 1);
+		win.cw = 8;
+		win.ch = 16;
 		col = row = 0;
 		xlimitcells(&col, &row);
 		assert(col == 1 && row == 1);
