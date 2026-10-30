@@ -2283,6 +2283,18 @@ xicdestroy(XIC xim, XPointer client, XPointer call)
 	return 1;
 }
 
+/* A window position from -g, from the far edge of the screen if negative. X
+ * positions are 16-bit, and -g accepts any int, which must not overflow here. */
+static int
+xwindoworigin(int offset, int negative, int screen, int size)
+{
+	LIMIT(offset, SHRT_MIN, SHRT_MAX);
+	if (negative)
+		offset += screen - size - 2;
+	LIMIT(offset, SHRT_MIN, SHRT_MAX);
+	return offset;
+}
+
 /* Connect and load the fonts, whose size limits the terminal's. */
 static void
 xopenfonts(void)
@@ -2318,10 +2330,8 @@ xinit(int cols, int rows)
 	/* adjust fixed window geometry */
 	win.w = 2 * borderpx + cols * win.cw;
 	win.h = 2 * borderpx + rows * win.ch;
-	if (xw.gm & XNegative)
-		xw.l += DisplayWidth(xw.dpy, xw.scr) - win.w - 2;
-	if (xw.gm & YNegative)
-		xw.t += DisplayHeight(xw.dpy, xw.scr) - win.h - 2;
+	xw.l = xwindoworigin(xw.l, xw.gm & XNegative, DisplayWidth(xw.dpy, xw.scr), win.w);
+	xw.t = xwindoworigin(xw.t, xw.gm & YNegative, DisplayHeight(xw.dpy, xw.scr), win.h);
 
 	/* Events */
 	xw.attrs.background_pixel = dc.col[defaultbg].pixel;

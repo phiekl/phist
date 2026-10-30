@@ -104,3 +104,11 @@ Ctrl+Shift+Home. Regenerate `config.h` and rebuild to adopt the defaults.
 Cursor, underline, emoji and bell behavior are described in
 [appearance](appearance.md); [scrollback](scrollback.md) explains history
 navigation and resizing.
+
+## Window geometry
+
+Use `-g` to set the initial size in cells and position in pixels, for
+example `phist -g 80x24-10+20`. Negative position offsets are relative
+to the far edge of the screen. Offsets are clamped to X11's signed
+16-bit range before and after resolving them against the screen size,
+avoiding overflow during adjustment.

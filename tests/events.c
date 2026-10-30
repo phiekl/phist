@@ -117,10 +117,23 @@ testdispatch(void)
 	puts("PASS: events outside the handler table are ignored");
 }
 
+static void
+testorigin(void)
+{
+	assert(xwindoworigin(10, 0, 1920, 640) == 10);
+	assert(xwindoworigin(-10, 1, 1920, 640) == 1268);
+	assert(xwindoworigin(INT_MAX, 0, 1920, 640) == SHRT_MAX);
+	assert(xwindoworigin(INT_MIN, 0, 1920, 640) == SHRT_MIN);
+	assert(xwindoworigin(-INT_MAX, 1, 1920, 65535) == SHRT_MIN);
+	assert(xwindoworigin(INT_MAX, 1, 65535, 1) == SHRT_MAX);
+	puts("PASS: window positions from -g stay in range");
+}
+
 int
 main(void)
 {
 	testwait();
 	testdispatch();
+	testorigin();
 	return 0;
 }
