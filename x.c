@@ -156,8 +156,6 @@ typedef struct {
 	int descent;
 	int badslant;
 	int badweight;
-	short lbearing;
-	short rbearing;
 	XftFont *match;
 	FcFontSet *set;
 	FcFontSet *textset; /* untrimmed, so later non-color fonts remain */
@@ -185,12 +183,13 @@ static void ximdestroy(XIM, XPointer, XPointer);
 static int xicdestroy(XIC, XPointer, XPointer);
 static void xinit(int, int);
 static void cresize(int, int);
+static void xlimitcells(int *, int *);
 static void xresize(int, int);
 static void vbellfree(void);
 static void xhints(void);
 static int xloadcolor(int, const char *, Color *);
 static int xloadfont(Font *, FcPattern *);
-static void xloadfonts(const char *, double);
+static int xloadfonts(const char *, double);
 static XftFont *xloademojifont(int);
 static FcPattern *xtextfallback(FcFontSet *, FcPattern *, Rune);
 static FcPattern *xfallbackmatch(Font *, FcFontSet **, FcPattern *, Rune, int);
@@ -327,7 +326,8 @@ typedef struct {
  * a collision in that table can require another font search. */
 enum { FRC_MAX = 1024, FRC_UNCOVERED = -2, UNCOVERED_BITS = 14 };
 static uint32_t uncovered[1 << UNCOVERED_BITS]; /* see xuncoveredkey() */
-enum { CELL_MAX = 4096 }; /* largest font ascent or descent, in pixels */
+/* The largest cell size, and font ascent or descent, in pixels. */
+enum { CELL_MAX = 4096 };
 static Fontcache *frc = NULL;
 static int frclen = 0;
 static int frccap = 0;
@@ -1137,11 +1137,21 @@ zoom(const Arg *arg)
 	zoomabs(&larg);
 }
 
+/* A size whose metrics are unusable leaves the fonts at the current size. */
+static void
+xzoomfonts(double size)
+{
+	double current = usedfontsize;
+
+	xunloadfonts();
+	if (xloadfonts(usedfont, size) && xloadfonts(usedfont, current))
+		die("can't use font %s\n", usedfont);
+}
+
 void
 zoomabs(const Arg *arg)
 {
-	xunloadfonts();
-	xloadfonts(usedfont, arg->f);
+	xzoomfonts(arg->f);
 	cresize(0, 0);
 	redraw();
 	xhints();
@@ -1691,6 +1701,15 @@ bmotion(XEvent *e)
 	mousesel(e, 0);
 }
 
+/* Keep every cell in the coordinates of X requests, which are 16-bit and
+ * signed, however large a window or -g asks for. */
+static void
+xlimitcells(int *col, int *row)
+{
+	*col = MAX(1, MIN(*col, (SHRT_MAX - 2 * borderpx) / win.cw));
+	*row = MAX(1, MIN(*row, (SHRT_MAX - 2 * borderpx) / win.ch));
+}
+
 void
 cresize(int width, int height)
 {
@@ -1703,8 +1722,7 @@ cresize(int width, int height)
 
 	col = (win.w - 2 * borderpx) / win.cw;
 	row = (win.h - 2 * borderpx) / win.ch;
-	col = MAX(1, col);
-	row = MAX(1, row);
+	xlimitcells(&col, &row);
 
 	tresize(col, row);
 	xresize(col, row);
@@ -1950,20 +1968,41 @@ xloadfont(Font *f, FcPattern *pattern)
 
 	f->ascent = f->match->ascent;
 	f->descent = f->match->descent;
-	f->lbearing = 0;
-	f->rbearing = f->match->max_advance_width;
 
-	f->height = f->ascent + f->descent;
+	/* Unusable height, without adding values that could overflow. */
+	f->height = xmetricok(f->ascent) && xmetricok(f->descent) ?
+	            f->ascent + f->descent : 0;
 	f->width = DIVCEIL(extents.xOff, strlen(ascii_printable));
 
 	return 0;
 }
 
-void
+/*
+ * Validate the cell size, scaled by cwscale and chscale, before using it as
+ * a divisor or in X coordinates: it must be at least 1, and not NaN, and at
+ * most CELL_MAX, so the two cells of a wide character fit in X's 16-bit
+ * coordinates.
+ */
+static int
+xsetcellsize(const Font *f)
+{
+	float cw = ceilf(f->width * cwscale), ch = ceilf(f->height * chscale);
+
+	if (f->width <= 0 || f->height <= 0 || !(cw >= 1 && cw <= CELL_MAX) ||
+	    !(ch >= 1 && ch <= CELL_MAX))
+		return 0;
+	win.cw = cw;
+	win.ch = ch;
+	return 1;
+}
+
+/* Load the fonts; return nonzero, with none loaded, if their metrics are unusable. */
+int
 xloadfonts(const char *fontstr, double fontsize)
 {
 	FcPattern *pattern;
-	double fontval;
+	double fontval = 0;
+	int bad = 0;
 
 	if (fontstr[0] == '-')
 		pattern = XftXlfdParse(fontstr, False, False);
@@ -2000,16 +2039,19 @@ xloadfonts(const char *fontstr, double fontsize)
 		die("can't open font %s\n", fontstr);
 
 	if (usedfontsize < 0) {
-		FcPatternGetDouble(dc.font.match->pattern,
-		                   FC_PIXEL_SIZE, 0, &fontval);
+		bad = FcPatternGetDouble(dc.font.match->pattern, FC_PIXEL_SIZE, 0,
+		                         &fontval) != FcResultMatch || !(fontval > 0);
 		usedfontsize = fontval;
 		if (fontsize == 0)
 			defaultfontsize = fontval;
 	}
 
 	/* Setting character width and height. */
-	win.cw = ceilf(dc.font.width * cwscale);
-	win.ch = ceilf(dc.font.height * chscale);
+	if (bad || !xsetcellsize(&dc.font)) {
+		xunloadfont(&dc.font);
+		FcPatternDestroy(pattern);
+		return 1;
+	}
 
 	FcPatternDel(pattern, FC_SLANT);
 	FcPatternAddInteger(pattern, FC_SLANT, FC_SLANT_ITALIC);
@@ -2027,6 +2069,7 @@ xloadfonts(const char *fontstr, double fontsize)
 		die("can't open font %s\n", fontstr);
 
 	FcPatternDestroy(pattern);
+	return 0;
 }
 
 /*
@@ -2259,13 +2302,15 @@ xinit(int cols, int rows)
 		die("could not init fontconfig.\n");
 
 	usedfont = (opt_font == NULL)? font : opt_font;
-	xloadfonts(usedfont, 0);
+	if (xloadfonts(usedfont, 0))
+		die("can't use font %s: unusable metrics\n", usedfont);
 
 	/* colors */
 	xw.cmap = XDefaultColormap(xw.dpy, xw.scr);
 	xloadcols();
 
-	/* adjust fixed window geometry */
+	/* adjust fixed window geometry; run() resizes the terminal to match */
+	xlimitcells(&cols, &rows);
 	win.w = 2 * borderpx + cols * win.cw;
 	win.h = 2 * borderpx + rows * win.ch;
 	if (xw.gm & XNegative)
@@ -2307,7 +2352,8 @@ xinit(int cols, int rows)
 	xw.specbuf = xmalloc(cols * sizeof(GlyphFontSpec));
 
 	/* Xft rendering context */
-	xw.draw = XftDrawCreate(xw.dpy, xw.buf, xw.vis, xw.cmap);
+	if (!(xw.draw = XftDrawCreate(xw.dpy, xw.buf, xw.vis, xw.cmap)))
+		die("can't create Xft drawing context\n");
 
 	/* input methods */
 	if (!ximopen(xw.dpy)) {
@@ -2494,8 +2540,8 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 		if (glyphidx) {
 			specs[numspecs].font = font->match;
 			specs[numspecs].glyph = glyphidx;
-			specs[numspecs].x = (short)xp;
-			specs[numspecs].y = (short)yp;
+			specs[numspecs].x = xshort(xp);
+			specs[numspecs].y = xshort(yp);
 			xp += runewidth;
 			numspecs++;
 			continue;
@@ -2527,8 +2573,8 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 			specs[numspecs].font = font->match;
 			specs[numspecs].glyph = f == FRC_UNCOVERED ? 0 :
 			                        XftCharIndex(xw.dpy, font->match, 0xFFFD);
-			specs[numspecs].x = (short)xp;
-			specs[numspecs].y = (short)yp;
+			specs[numspecs].x = xshort(xp);
+			specs[numspecs].y = xshort(yp);
 			xp += runewidth;
 			numspecs++;
 			continue;
@@ -2536,8 +2582,8 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 
 		specs[numspecs].font = frc[f].font;
 		specs[numspecs].glyph = glyphidx;
-		specs[numspecs].x = (short)xp;
-		specs[numspecs].y = (short)yp;
+		specs[numspecs].x = xshort(xp);
+		specs[numspecs].y = xshort(yp);
 		xp += runewidth;
 		numspecs++;
 	}
@@ -4240,6 +4286,9 @@ run:
 	XSetLocaleModifiers("");
 	cols = MAX(cols, 1);
 	rows = MAX(rows, 1);
+	/* The cell size, which limits these further, is not known yet. */
+	cols = MIN(cols, SHRT_MAX);
+	rows = MIN(rows, SHRT_MAX);
 	tnew(cols, rows);
 	xinit(cols, rows);
 	xsetenv();

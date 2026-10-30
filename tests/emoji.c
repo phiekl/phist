@@ -42,6 +42,8 @@ testmatch(FcConfig *c, FcFontSet **s, int n, FcPattern *p, FcResult *r)
 #include "../x.c"
 #undef main
 
+/* Fonts report these metrics: 1 for all of them, 2 for italics only. */
+static int extreme, extremeascent, extremedescent;
 enum { UNCOVERED = 0x100000 }; /* no font has this character or later ones */
 enum { FALLBACKONLY = 0xF0000 }; /* the fallback found for it has these */
 static XftFont textfonts[4], fallbackfont, monofont;
@@ -81,8 +83,27 @@ XftFontOpenPattern(Display *d, FcPattern *pattern)
 	font->height = font->max_advance_width = fixedsize ? 100 : (int)ceil(size * 1.2);
 	font->ascent = font->height * 3 / 4;
 	font->descent = font->height - font->ascent;
+	if (extreme) {
+		int slant;
+
+		/* Only the italic fonts, or else all of them. */
+		if (extreme == 1 || (FcPatternGetInteger(pattern, FC_SLANT, 0, &slant) ==
+		    FcResultMatch && slant == FC_SLANT_ITALIC)) {
+			font->ascent = extremeascent;
+			font->descent = extremedescent;
+			font->height = extremeascent < 0 ? extremeascent : 1;
+		}
+	}
 	livefonts++;
 	return font;
+}
+
+static int metricwidth = 8;
+
+void
+XftTextExtentsUtf8(Display *d, XftFont *font, const FcChar8 *text, int len, XGlyphInfo *extents)
+{
+	extents->xOff = metricwidth * len;
 }
 
 static int
@@ -413,9 +434,115 @@ main(void)
 	s = spec(UNCOVERED, 0);
 	assert(s.font == &textfonts[0] && !s.glyph && !frclen && !failopen);
 
+	/* Metrics that cannot make a cell are refused, leaving no font open. */
+	xunloadfonts();
+	assert(!livefonts);
+	fixedsize = 0;
+	assert(!xloadfonts("Test:pixelsize=13", 0));
+	assert(win.cw == 8 && win.ch == 16 && usedfontsize == 13 && livefonts == 4);
+	xunloadfonts();
+	win.cw = win.ch = 77;
+	metricwidth = 0;
+	assert(xloadfonts("Test:pixelsize=13", 0) && !livefonts && win.cw == 77);
+	metricwidth = 8;
+	{
+		float scales[] = { 0, -1, NAN, INFINITY, 1000 };
+
+		for (i = 0; i < LEN(scales); i++) {
+			cwscale = scales[i];
+			assert(xloadfonts("Test:pixelsize=13", 0) && !livefonts);
+			cwscale = 1;
+			chscale = scales[i];
+			assert(xloadfonts("Test:pixelsize=13", 0) && !livefonts);
+			chscale = 1;
+		}
+		assert(win.cw == 77 && win.ch == 77);
+	}
+
+	/* Extreme values are refused without adding them up. */
+	{
+		const int cases[][2] = {
+			{ INT_MAX, INT_MAX }, { INT_MIN, INT_MIN }, { INT_MIN, 0 }, { 0, INT_MIN },
+			{ INT_MAX, 0 }, { 0, INT_MAX }, { INT_MIN, INT_MAX },
+			{ CELL_MAX + 1, 0 }, { 0, CELL_MAX + 1 },
+			{ -CELL_MAX - 1, CELL_MAX + 2 }, { CELL_MAX + 2, -CELL_MAX - 1 },
+		};
+
+		extreme = 1;
+		for (i = 0; i < LEN(cases); i++) {
+			extremeascent = cases[i][0];
+			extremedescent = cases[i][1];
+			assert(xloadfonts("Test:pixelsize=13", 0) && !livefonts);
+		}
+		/* The largest accepted pair, whose sum still fails the cell limit. */
+		extremeascent = extremedescent = CELL_MAX;
+		assert(xloadfonts("Test:pixelsize=13", 0) && !livefonts);
+		extremeascent = CELL_MAX;
+		extremedescent = 0;
+		assert(!xloadfonts("Test:pixelsize=13", 0) && win.ch == CELL_MAX);
+		xunloadfonts();
+
+		/* Fonts not setting the cell size do not need to fit it. */
+		extreme = 2;
+		extremeascent = extremedescent = INT_MAX;
+		assert(!xloadfonts("Test:pixelsize=13", 0) && win.ch == 16);
+		assert(dc.ifont.height <= 0);
+
+		/* Nor does a color font with them replace the normal one. */
+		extreme = 0;
+		setup();
+		extreme = 1;
+		extremeascent = extremedescent = INT_MIN;
+		assert(!xloademojifont(2) && !livefonts);
+		extreme = 0;
+		xunloadfonts();
+	}
+
+	/* Zooming too far keeps the size before it, and any other still works. */
+	usedfont = "Test:pixelsize=13";
+	assert(!xloadfonts(usedfont, 0));
+	xzoomfonts(100000);
+	assert(usedfontsize == 13 && win.cw == 8 && win.ch == 16 && livefonts == 4);
+	xzoomfonts(20);
+	assert(usedfontsize == 20 && win.ch == 24 && livefonts == 4);
+
+	/* Cells stay within X's coordinates at any window size, and at least one. */
+	{
+		int col, row;
+
+		win.cw = 8;
+		win.ch = 16;
+		borderpx = 2;
+		col = row = 100000;
+		xlimitcells(&col, &row);
+		assert(col == 4095 && row == 2047);
+		assert(2 + col * win.cw <= SHRT_MAX && 2 + row * win.ch <= SHRT_MAX);
+		col = row = 0;
+		xlimitcells(&col, &row);
+		assert(col == 1 && row == 1);
+		col = 80;
+		row = 24;
+		xlimitcells(&col, &row);
+		assert(col == 80 && row == 24);
+		borderpx = 0;
+		win.cw = CELL_MAX;
+		col = 100;
+		xlimitcells(&col, &row);
+		assert(col == 7);
+	}
+
+	/* A font's own metrics cannot move glyphs out of range when narrowed. */
+	assert(xshort(40000) == SHRT_MAX && xshort(-40000) == SHRT_MIN && xshort(12.5) == 12);
+	win.cw = 8;
+	win.ch = 16;
+	dc.font.ascent = 40000;
+	s = spec('x', 0);
+	assert(s.y == SHRT_MAX);
+	dc.font.ascent = 12;
+
 	xunloadfonts();
 	assert(!livefonts);
 	free(frc);
-	puts("PASS: emoji font priority, presentation selection, primary/fallback preservation, styles, cell fitting, alignment, optional fonts, zoom cache cleanup, the fallback cache limit and fallback failures");
+	puts("PASS: emoji font priority, presentation selection, primary/fallback preservation, styles, cell fitting, alignment, optional fonts, zoom cache cleanup, the fallback cache limit, fallback failures, extreme metrics and cell size limits");
 	return 0;
 }

@@ -129,6 +129,19 @@ The fixed colors of concealed and low-contrast text, dialogs and bars use the
 nearest palette color until they can be allocated. `LC_ALL=C.UTF-8 sh
 tests/rendering.sh` checks both.
 
+## Cell size
+
+The primary font's metrics, scaled by `cwscale` and `chscale`, give the size
+of a cell, which must be from 1 to 4,096 pixels. An ascent or descent beyond
+4,096 pixels either way makes a font's metrics unusable, and such values are
+never added up. A primary font without usable metrics is refused when phist
+starts, an emoji font without them is not used, and zooming to a size that
+would be outside these limits keeps the current size. X coordinates are
+16-bit, so columns and rows stop at what fits in 32,767 pixels, whatever
+size the window or `-g` asks for; a larger window has blank space beyond
+them.
+`LC_ALL=C.UTF-8 sh tests/emoji.sh` checks these limits.
+
 ## Fallback fonts
 
 Characters missing from the primary font use a fallback found through
