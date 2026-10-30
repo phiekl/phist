@@ -3,9 +3,9 @@
 #include <errno.h>
 #include <math.h>
 #include <limits.h>
+#include <poll.h>
 #include <locale.h>
 #include <signal.h>
-#include <sys/select.h>
 #include <time.h>
 #include <unistd.h>
 #include <wchar.h>
@@ -4080,14 +4080,41 @@ applyresize(void)
 	pendingw = pendingh = 0;
 }
 
+/*
+ * Wait up to timeout ms, or without limit if negative, for the tty or the X
+ * connection. Unlike select(), poll() takes descriptors of any number, and a
+ * program may start phist with many open. A hung up or failed tty counts as
+ * ready, for its read or write to report. Return -1 if a signal interrupted.
+ */
+static int
+xwait(int xfd, int ttyfd, int wantwrite, double timeout, int *readable, int *writable)
+{
+	struct pollfd fds[] = {
+		{ .fd = ttyfd, .events = POLLIN | (wantwrite ? POLLOUT : 0) },
+		{ .fd = xfd, .events = POLLIN },
+	};
+	int ms = timeout < 0 ? -1 : timeout >= INT_MAX ? INT_MAX : ceil(timeout);
+
+	*readable = *writable = 0;
+	if (poll(fds, LEN(fds), ms) < 0) {
+		if (errno == EINTR)
+			return -1;
+		die("poll failed: %s\n", strerror(errno));
+	}
+	if ((fds[0].revents | fds[1].revents) & POLLNVAL)
+		die("poll failed: %s\n", strerror(EBADF));
+	*readable = !!(fds[0].revents & (POLLIN | POLLHUP | POLLERR));
+	*writable = wantwrite && (fds[0].revents & (POLLOUT | POLLHUP | POLLERR));
+	return 0;
+}
+
 void
 run(void)
 {
 	XEvent ev;
 	int w = win.w, h = win.h;
-	fd_set rfd, wfd;
-	int xfd = XConnectionNumber(xw.dpy), ttyfd, xev, drawing;
-	struct timespec seltv, *tv, now, trigger;
+	int xfd = XConnectionNumber(xw.dpy), ttyfd, xev, drawing, readable, writable;
+	struct timespec now, trigger;
 	double timeout, urlremain, bellremain, pasteremain, sendremain;
 
 	/* Waiting for window mapping */
@@ -4118,33 +4145,19 @@ run(void)
 		sendremain = selsendremaining(now);
 		if (sendremain >= 0 && (timeout < 0 || sendremain < timeout))
 			timeout = sendremain;
-		FD_ZERO(&rfd);
-		FD_ZERO(&wfd);
-		FD_SET(ttyfd, &rfd);
-		FD_SET(xfd, &rfd);
-		/* Deliver queued input and query replies as the child reads. */
-		if (ttywritepending())
-			FD_SET(ttyfd, &wfd);
-
 		if (XPending(xw.dpy))
 			timeout = 0;  /* existing events might not set xfd */
 
-		seltv.tv_sec = timeout / 1E3;
-		seltv.tv_nsec = 1E6 * (timeout - 1E3 * seltv.tv_sec);
-		tv = timeout >= 0 ? &seltv : NULL;
-
-		if (pselect(MAX(xfd, ttyfd)+1, &rfd, &wfd, NULL, tv, NULL) < 0) {
-			if (errno == EINTR)
-				continue;
-			die("select failed: %s\n", strerror(errno));
-		}
+		/* Deliver queued input and query replies as the child reads. */
+		if (xwait(xfd, ttyfd, ttywritepending(), timeout, &readable, &writable) < 0)
+			continue;
 		clock_gettime(CLOCK_MONOTONIC, &now);
 		pasteremaining(now);
 		selsendremaining(now);
 
-		if (FD_ISSET(ttyfd, &wfd))
+		if (writable)
 			ttyflushwrites();
-		if (FD_ISSET(ttyfd, &rfd))
+		if (readable)
 			ttyread();
 
 		xev = 0;
@@ -4172,7 +4185,7 @@ run(void)
 		 * maximum latency intervals during `cat huge.txt`, and perfect
 		 * sync with periodic updates from animations/key-repeats/etc.
 		 */
-		if (FD_ISSET(ttyfd, &rfd) || xev) {
+		if (readable || xev) {
 			if (!drawing) {
 				trigger = now;
 				drawing = 1;

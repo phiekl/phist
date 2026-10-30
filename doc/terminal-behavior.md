@@ -26,6 +26,14 @@ tests/sequences.sh` for escape/charset truncation, parameter bounds and
 wide-cell regressions, then [fuzzing](testing.md#fuzzing) for broader
 coverage.
 
+## Event loop
+
+The main loop waits with `poll()`, which takes descriptors of any number, so
+a program that starts phist with over 1,024 descriptors open cannot push the
+tty or X connection out of a fixed-size `fd_set`. Timeouts round up to whole
+milliseconds. A tty that hung up counts as ready, so its read reports it. Run
+`LC_ALL=C.UTF-8 sh tests/events.sh`.
+
 ## Media Copy
 
 Application-controlled Media Copy sequences work only when phist was started

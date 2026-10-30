@@ -66,7 +66,7 @@ sh tests/paste.sh` for paste-path regressions.
 
 A short write does not imply that child output is ready to read. Queued
 output is retried after the tty becomes writable; output is read only when
-`select()` reports readability. Reading immediately after a short write
+`poll()` reports readability. Reading immediately after a short write
 could block forever with a silent child, and a second read using the same
 readiness result could block too.
 
