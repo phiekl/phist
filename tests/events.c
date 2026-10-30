@@ -77,9 +77,50 @@ testwait(void)
 	          : "PASS: waiting (descriptors past FD_SETSIZE not allowed here)");
 }
 
+static int handled;
+
+static void
+counthandled(XEvent *e)
+{
+	handled++;
+}
+
+static void
+testdispatch(void)
+{
+	XEvent e = {0};
+	int types[] = { -1, LASTEvent, 64, 127, 128, 255, INT_MAX, INT_MIN };
+	int i;
+
+	handler[KeyPress] = counthandled;
+	e.type = KeyPress;
+	xdispatch(&e);
+	assert(handled == 1);
+	/* The last core type has an entry, even if empty. */
+	handler[LASTEvent - 1] = counthandled;
+	e.type = LASTEvent - 1;
+	xdispatch(&e);
+	assert(handled == 2);
+	/* Types outside the table reach no handler, and no memory after it. */
+	handler[LASTEvent - 1] = NULL;
+	e.type = LASTEvent - 1;
+	xdispatch(&e);
+	for (i = 0; i < LEN(types); i++) {
+		e.type = types[i];
+		xdispatch(&e);
+	}
+	assert(handled == 2);
+	/* An empty entry is skipped. */
+	e.type = 0;
+	xdispatch(&e);
+	assert(handled == 2);
+	puts("PASS: events outside the handler table are ignored");
+}
+
 int
 main(void)
 {
 	testwait();
+	testdispatch();
 	return 0;
 }

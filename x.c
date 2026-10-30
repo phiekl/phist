@@ -4080,6 +4080,14 @@ applyresize(void)
 	pendingw = pendingh = 0;
 }
 
+/* Extensions deliver event types beyond the core ones the table covers. */
+static void
+xdispatch(XEvent *e)
+{
+	if (BETWEEN(e->type, 0, LEN(handler) - 1) && handler[e->type])
+		handler[e->type](e);
+}
+
 /*
  * Wait up to timeout ms, or without limit if negative, for the tty or the X
  * connection. Unlike select(), poll() takes descriptors of any number, and a
@@ -4166,8 +4174,7 @@ run(void)
 			XNextEvent(xw.dpy, &ev);
 			if (XFilterEvent(&ev, None))
 				continue;
-			if (handler[ev.type])
-				(handler[ev.type])(&ev);
+			xdispatch(&ev);
 		}
 
 		if (vbellset)

@@ -31,8 +31,9 @@ coverage.
 The main loop waits with `poll()`, which takes descriptors of any number, so
 a program that starts phist with over 1,024 descriptors open cannot push the
 tty or X connection out of a fixed-size `fd_set`. Timeouts round up to whole
-milliseconds. A tty that hung up counts as ready, so its read reports it. Run
-`LC_ALL=C.UTF-8 sh tests/events.sh`.
+milliseconds. A tty that hung up counts as ready, so its read reports it. X
+events of types beyond the core ones, which extensions deliver, are ignored.
+Run `LC_ALL=C.UTF-8 sh tests/events.sh`.
 
 ## Media Copy
 
