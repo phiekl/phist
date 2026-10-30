@@ -277,5 +277,54 @@ main(void)
 	}
 
 	puts("PASS: charset, escape finals, wide overwrite, CSI parameter bounds, no local echo, opt-in color changes, title sanitising, string length limit and rate-limited diagnostics");
+
+	/* OSC numbers do not wrap around, and must be numbers throughout. */
+	{
+		const char *badops[] = { "4294967298", "2147483648", "99999999999999999999",
+			"2x", "x2", "+2", "-2", " 2" };
+		const char *badindexes[] = { "4294967296", "4294967297", "2147483648", "0x",
+			"x", "", "+0", "-0", " 0" };
+		char text[64];
+		int sets, resets, saved = allowcolorchanges;
+		size_t i;
+
+		allowcolorchanges = 1;
+		reset(20, 4);
+		put("\033]2;kept\007");
+		for (i = 0; i < LEN(badops); i++) {
+			snprintf(text, sizeof(text), "\033]%s;changed\007", badops[i]);
+			put(text);
+			assert(!strcmp(lasttitle, "kept"));
+		}
+		put("\033]2147483647;changed\007"); /* the largest number, not a known opcode */
+		assert(!strcmp(lasttitle, "kept"));
+		put("\033]02;leading zero\007");
+		assert(!strcmp(lasttitle, "leading zero"));
+		put("\033];empty\007");
+		assert(!strcmp(lasttitle, "empty"));
+
+		sets = colorsets;
+		resets = colorresets;
+		for (i = 0; i < LEN(badindexes); i++) {
+			snprintf(text, sizeof(text), "\033]4;%s;red\007", badindexes[i]);
+			put(text);
+			assert(colorsets == sets);
+			snprintf(text, sizeof(text), "\033]104;%s\007", badindexes[i]);
+			put(text);
+			assert(colorresets == resets);
+		}
+		put("\033]4;0;red\007\033]4;255;red\007");
+		assert(colorsets == sets + 2);
+		put("\033]104;7\007");
+		assert(colorresets == resets + 1);
+		allowcolorchanges = saved;
+		/* Permission checks still come first. */
+		allowcolorchanges = 0;
+		sets = colorsets;
+		put("\033]4;0;red\007");
+		assert(colorsets == sets);
+		allowcolorchanges = saved;
+		puts("PASS: OSC opcodes and color indexes are checked whole numbers");
+	}
 	return 0;
 }

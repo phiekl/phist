@@ -86,6 +86,10 @@ interactive shell's title-setting hook can emit an ESC between commands,
 terminating the string early and sending the remaining payload into
 screen/history storage instead.
 
+OSC opcodes and palette indexes must be whole decimal numbers that fit an `int`,
+so `OSC 4294967298` is not `OSC 2`. Any other field is an unknown opcode or an
+invalid index. An empty opcode still means 0.
+
 Run `LC_ALL=C.UTF-8 sh tests/sequences.sh` for overflow and recovery checks.
 
 ## Local echo

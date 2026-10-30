@@ -4779,6 +4779,26 @@ osc_link(char *text, size_t len)
 		term.c.attr.mode |= ATTR_LINKSTART;
 }
 
+/* The value of a whole field of decimal digits, or -1 if it is anything else or
+ * too large. atoi() would make 4294967298 act as opcode 2. */
+static int
+strnumber(const char *s)
+{
+	int value = 0, digit;
+
+	if (!*s)
+		return -1;
+	for (; *s; s++) {
+		if (!BETWEEN(*s, '0', '9'))
+			return -1;
+		digit = *s - '0';
+		if (value > (INT_MAX - digit) / 10)
+			return -1;
+		value = value * 10 + digit;
+	}
+	return value;
+}
+
 void
 strhandle(void)
 {
@@ -4814,7 +4834,8 @@ strhandle(void)
 		return;
 	}
 	strparse();
-	par = (narg = strescseq.narg) ? atoi(strescseq.args[0]) : 0;
+	/* No number at all is 0, as in OSC ;title. */
+	par = (narg = strescseq.narg) && *strescseq.args[0] ? strnumber(strescseq.args[0]) : 0;
 
 	switch (strescseq.type) {
 	case ']': /* OSC -- Operating System Command */
@@ -4876,7 +4897,7 @@ strhandle(void)
 			p = strescseq.args[2];
 			/* FALLTHROUGH */
 		case 104: /* color reset */
-			j = (narg > 1) ? atoi(strescseq.args[1]) : -1;
+			j = (narg > 1) ? strnumber(strescseq.args[1]) : -1;
 
 			if (p && !strcmp(p, "?")) {
 				osc_color_response(j, 0, 1);

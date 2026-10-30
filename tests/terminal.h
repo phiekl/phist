@@ -31,7 +31,7 @@ int xstartdraw(void) { return 0; }
 void xfinishdraw(void) {}
 void xloadcols(void) {}
 static int colorsets, colorresets;
-int xsetcolorname(int a, const char *b) { b ? colorsets++ : colorresets++; return 0; }
+int xsetcolorname(int a, const char *b) { if (a < 0) return 1; b ? colorsets++ : colorresets++; return 0; }
 int xgetcolor(int a, unsigned char *b, unsigned char *c, unsigned char *d) { return 0; }
 static char lasttitle[1024], lasticontitle[1024];
 void xseticontitle(char *s) { snprintf(lasticontitle, sizeof(lasticontitle), "%s", s ? s : ""); }
