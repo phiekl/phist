@@ -72,6 +72,13 @@ main(void)
 	Arg scroll = { .i = 1 };
 	int i;
 
+	/* Past INT_MAX, which wrapped to a buffer too small for the text. */
+	assert(selbufsize(80, 24) == 81 * 24 * UTF_SIZ);
+	if (sizeof(size_t) > 4) {
+		assert(selbufsize(1100, 1000000) == (size_t)4404000000u);
+		assert(selbufsize(600, 1000000) == (size_t)2404000000u);
+	}
+
 	setlocale(LC_CTYPE, "");
 	worddelimiters = L" \t\r\n`~!#$%^&*()=+[{]}\\|;:'\",<>?";
 	reset(80, 5);

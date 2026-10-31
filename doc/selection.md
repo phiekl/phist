@@ -181,3 +181,7 @@ unrelated property events, concurrent transfers to one window, existing
 event masks, restarts, timeouts, limits, vanished requestors and error
 handling.
 `tests/paste.sh` covers copying from the full view.
+
+The buffer for a selection is sized in `size_t`, so one spanning a very large
+`scrollback_lines` is not limited by the range of an `int`. Run
+`LC_ALL=C.UTF-8 sh tests/selection.sh` to check.

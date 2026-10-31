@@ -2963,18 +2963,29 @@ selsnap(int *x, int *y, int direction)
 	}
 }
 
+/* Maximum buffer size for whole-line selections, or 0 on size_t overflow. */
+static size_t
+selbufsize(int cols, int lines)
+{
+	size_t perline = ((size_t)cols + 1) * UTF_SIZ;
+
+	return (size_t)lines > SIZE_MAX / perline ? 0 : lines * perline;
+}
+
 char *
 getsel(void)
 {
 	char *str, *ptr;
-	int y, bufsize, lastx, linelen, end_idx, insert_newline, is_wrapped;
+	size_t bufsize;
+	int y, lastx, linelen, end_idx, insert_newline, is_wrapped;
 	const Glyph *gp, *last;
 	Line line;
 
 	if (sel.ob.x == -1)
 		return NULL;
 
-	bufsize = (term.col+1) * (sel.ne.y-sel.nb.y+1) * UTF_SIZ;
+	if (!(bufsize = selbufsize(term.col, sel.ne.y - sel.nb.y + 1)))
+		return NULL;
 	ptr = str = xmalloc(bufsize);
 
 	/* append every set & selected glyph to the selection */
