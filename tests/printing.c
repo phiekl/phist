@@ -20,6 +20,61 @@ dump_is(const char *expected, const char *request)
 	iofd = -1;
 }
 
+/* A -o pipe losing its reader ends the printing only, and the child still
+ * dies of SIGPIPE like any other program: "yes" would complain otherwise. */
+static void
+testclosedpipe(void)
+{
+	char out[64], text[512], *args[] = { "/bin/sh", "-c",
+		"sleep 0.1; yes | head -n 1 >/dev/null; echo finished", NULL };
+	int fds[2], fd, status;
+	size_t len = 0;
+	ssize_t n;
+	pid_t child;
+
+	child = fork();
+	assert(child >= 0);
+	if (!child) {
+		termname = "dumb";
+		assert(pipe(fds) == 0);
+		close(fds[0]);
+		snprintf(out, sizeof(out), "/proc/self/fd/%d", fds[1]);
+		fd = ttynew(NULL, "/bin/sh", out, args, NULL);
+		signal(SIGCHLD, SIG_DFL);
+		assert(iofd >= 0);
+		close(fds[1]);
+		tprinter("x", 1);
+		/* The printing stopped here, and only that. */
+		assert(iofd == -1);
+		while (len < sizeof(text) - 1 &&
+		       (n = read(fd, text + len, sizeof(text) - 1 - len)) > 0)
+			len += n;
+		text[len] = '\0';
+		assert(strstr(text, "finished") && !strstr(text, "yes:"));
+		_exit(7);
+	}
+	assert(waitpid(child, &status, 0) == child);
+	assert(WIFEXITED(status) && WEXITSTATUS(status) == 7);
+}
+
+/* Without -o too, as stderr can be a pipe whose reader goes away. */
+static void
+testsigpipeignored(void)
+{
+	struct sigaction sa;
+	int status;
+	pid_t child;
+
+	assert((child = fork()) >= 0);
+	if (!child) {
+		stty_args = "true";
+		ttynew("/dev/null", NULL, NULL, NULL, NULL);
+		sigaction(SIGPIPE, NULL, &sa);
+		_exit(sa.sa_handler != SIG_IGN);
+	}
+	assert(waitpid(child, &status, 0) == child && status == 0);
+}
+
 int
 main(void)
 {
@@ -38,6 +93,8 @@ main(void)
 	dump_is("dhidden\n", "\033[1i");
 	dump_is("x\033[4i", "\033[5ix\033[4i");
 	mcallowed = 0;
+	testsigpipeignored();
+	testclosedpipe();
 	reset(20, 3);
 	put("\344\270\255\r\n\r\nx");
 	dump_is("\344\270\255\n\nx\n", NULL);

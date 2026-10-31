@@ -3109,6 +3109,7 @@ execsh(char *cmd, char **args)
 	signal(SIGQUIT, SIG_DFL);
 	signal(SIGTERM, SIG_DFL);
 	signal(SIGALRM, SIG_DFL);
+	signal(SIGPIPE, SIG_DFL);
 
 	execvp(prog, args);
 	_exit(1);
@@ -3166,6 +3167,7 @@ stty(char **args)
 		perror("Couldn't call stty");
 		break;
 	case 0:
+		signal(SIGPIPE, SIG_DFL);
 		execvp(argv[0], argv);
 		perror("Couldn't call stty");
 		_exit(127);
@@ -3192,6 +3194,9 @@ ttynew(const char *line, char *cmd, const char *out, char **args, const char *di
 
 	/* An inherited SIG_IGN would prevent waiting for the child's status. */
 	signal(SIGCHLD, SIG_DFL);
+
+	/* A reader of -o or of stderr going away doesn't end the terminal. */
+	signal(SIGPIPE, SIG_IGN);
 
 	if (out) {
 		term.mode |= MODE_PRINT;

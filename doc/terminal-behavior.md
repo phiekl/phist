@@ -54,6 +54,11 @@ The launching terminal receives neither raw output nor a screen dump. With
 `phist -o FILE`, Media Copy still writes to `FILE`. See `phist(1)` and run
 `LC_ALL=C.UTF-8 sh tests/printing.sh` for printing regressions.
 
+If `FILE` is a pipe whose reader goes away, printing stops with an error on
+stderr; the terminal and its shell carry on. phist ignores `SIGPIPE`, also
+without `-o` for the sake of stderr, but programs in the terminal still get
+the default.
+
 ## Keyboard locking
 
 KAM (`CSI 2 h` / `CSI 2 l`) is ignored. An application or printed file
