@@ -48,6 +48,15 @@ putrepeat(int c, size_t n)
 	}
 }
 
+static void
+base64_is(const char *encoded, const char *expected)
+{
+	char *decoded = base64dec(encoded);
+
+	assert(!strcmp(decoded, expected));
+	free(decoded);
+}
+
 int
 main(void)
 {
@@ -57,6 +66,10 @@ main(void)
 	char reply[256];
 
 	assert(setlocale(LC_CTYPE, "C.UTF-8"));
+	base64_is("QQ==", "A");
+	base64_is("QUI=", "AB");
+	base64_is("QUJD", "ABC");
+	base64_is("QUJDRA==", "ABCD");
 	reset(10, 4);
 
 	/* OSC 7 is metadata shared by both screens, kept across clears and

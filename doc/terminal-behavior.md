@@ -90,6 +90,9 @@ OSC opcodes and palette indexes must be whole decimal numbers that fit an `int`,
 so `OSC 4294967298` is not `OSC 2`. Any other field is an unknown opcode or an
 invalid index. An empty opcode still means 0.
 
+OSC 52 decodes base64 padding the same way whether plain `char` is signed or
+not, so the sequence suite also runs with `-funsigned-char`.
+
 Run `LC_ALL=C.UTF-8 sh tests/sequences.sh` for overflow and recovery checks.
 
 ## Local echo
