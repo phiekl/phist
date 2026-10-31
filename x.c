@@ -1856,7 +1856,9 @@ xhints(void)
 	XWMHints wm = {.flags = InputHint, .input = 1};
 	XSizeHints *sizeh;
 
-	sizeh = XAllocSizeHints();
+	/* Keep the existing size hints if allocation fails. */
+	if (!(sizeh = XAllocSizeHints()))
+		return;
 
 	sizeh->flags = PSize | PResizeInc | PBaseSize | PMinSize;
 	sizeh->height = win.h;

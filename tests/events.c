@@ -77,6 +77,33 @@ testwait(void)
 	          : "PASS: waiting (descriptors past FD_SETSIZE not allowed here)");
 }
 
+static int failhints, sethints;
+
+XSizeHints *
+XAllocSizeHints(void)
+{
+	return failhints ? NULL : calloc(1, sizeof(XSizeHints));
+}
+
+void
+XSetWMProperties(Display *d, Window w, XTextProperty *name, XTextProperty *icon,
+                 char **argv, int argc, XSizeHints *size, XWMHints *wm, XClassHint *class)
+{
+	sethints++;
+}
+
+static void
+testhints(void)
+{
+	xhints();
+	assert(sethints == 1);
+	failhints = 1;
+	xhints();
+	assert(sethints == 1);
+	failhints = 0;
+	puts("PASS: failing to allocate size hints skips them");
+}
+
 static int handled;
 
 static void
@@ -171,6 +198,7 @@ testclose(void)
 int
 main(void)
 {
+	testhints();
 	testclose();
 	testwait();
 	testdispatch();

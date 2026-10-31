@@ -141,7 +141,8 @@ would be outside these limits keeps the current size. X coordinates are
 size the window or `-g` asks for, and the screen stops at 4,194,304 cells in
 total, about 128 MiB for the two screens. A larger window has blank space
 beyond them. These limits apply before the terminal allocates anything for
-`-g`.
+`-g`. If Xlib cannot allocate the window
+manager's size hints, as when zooming, the window keeps the ones it had.
 `LC_ALL=C.UTF-8 sh tests/emoji.sh` checks these limits.
 
 ## Fallback fonts
