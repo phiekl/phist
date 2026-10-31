@@ -29,6 +29,14 @@ XftColorAllocValue(Display *d, Visual *v, Colormap m, const XRenderColor *value,
 	return 1;
 }
 
+Bool
+XftColorAllocName(Display *d, const Visual *v, Colormap m, const char *name, XftColor *color)
+{
+	allocations++;
+	color->pixel = 0x123456;
+	return 1;
+}
+
 void XftColorFree(Display *d, Visual *v, Colormap m, XftColor *color) { frees++; }
 void
 XftDrawRect(XftDraw *d, const XftColor *c, int x, int y, unsigned int w, unsigned int h)
@@ -446,6 +454,34 @@ testtempcolors(void)
 	puts("PASS: colors made for a run are freed, and failures use the palette");
 }
 
+/* Resetting the palette keeps the one in use if a color cannot be allocated. */
+static void
+testpalette(void)
+{
+	Color *palette;
+	int before;
+
+	failalloc = 0;
+	xloadcols();
+	palette = dc.col;
+	assert(dc.collen >= 256 && dc.col[1].pixel == 0x123456);
+	setcolor(&dc.col[1], 0xabcdef);
+
+	/* The named colors load, the rest fail, and only the new ones are freed. */
+	failalloc = 1;
+	before = frees;
+	xloadcols();
+	assert(frees == before + 16);
+	assert(dc.col == palette && dc.col[1].pixel == 0xabcdef);
+
+	failalloc = 0;
+	before = frees;
+	xloadcols();
+	assert(frees == before + dc.collen);
+	assert(dc.col == palette && dc.col[1].pixel == 0x123456);
+	puts("PASS: a failed palette reset keeps the palette in use");
+}
+
 int
 main(void)
 {
@@ -577,5 +613,6 @@ main(void)
 	testvisibility();
 	testconcealedurl();
 	testundercurl();
+	testpalette();
 	return 0;
 }

@@ -1780,31 +1780,44 @@ xloadcolor(int i, const char *name, Color *ncolor)
 	return XftColorAllocName(xw.dpy, xw.vis, xw.cmap, name, ncolor);
 }
 
+/*
+ * Load the palette into a new array, so that the one in use survives a failure.
+ * That only ends phist when it starts, not when a program resets the colors.
+ */
 void
 xloadcols(void)
 {
-	int i;
 	static int loaded;
-	Color *cp;
+	Color *next;
+	int i, len = MAX(LEN(colorname), 256);
 
 	xclearunderlinecolors();
 
-	if (loaded) {
-		for (cp = dc.col; cp < &dc.col[dc.collen]; ++cp)
-			XftColorFree(xw.dpy, xw.vis, xw.cmap, cp);
-	} else {
-		dc.collen = MAX(LEN(colorname), 256);
-		dc.col = xmalloc(dc.collen * sizeof(Color));
-	}
-
-	for (i = 0; i < dc.collen; i++)
-		if (!xloadcolor(i, NULL, &dc.col[i])) {
+	next = xmalloc(len * sizeof(Color));
+	for (i = 0; i < len; i++) {
+		if (xloadcolor(i, NULL, &next[i]))
+			continue;
+		if (!loaded) {
 			if (colorname[i])
 				die("could not allocate color '%s'\n", colorname[i]);
-			else
-				die("could not allocate color %d\n", i);
+			die("could not allocate color %d\n", i);
 		}
-	loaded = 1;
+		fprintf(stderr, "could not allocate color %d, keeping the palette\n", i);
+		while (i > 0)
+			XftColorFree(xw.dpy, xw.vis, xw.cmap, &next[--i]);
+		free(next);
+		return;
+	}
+	if (!loaded) {
+		dc.col = next;
+		dc.collen = len;
+		loaded = 1;
+		return;
+	}
+	for (i = 0; i < len; i++)
+		XftColorFree(xw.dpy, xw.vis, xw.cmap, &dc.col[i]);
+	memcpy(dc.col, next, len * sizeof(Color));
+	free(next);
 }
 
 int

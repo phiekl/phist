@@ -126,8 +126,10 @@ redraws the screen when recycling them. Other visuals release temporary
 colors after drawing. Allocation failure uses the default foreground or
 background, or leaves faint text undimmed.
 The fixed colors of concealed and low-contrast text, dialogs and bars use the
-nearest palette color until they can be allocated. `LC_ALL=C.UTF-8 sh
-tests/rendering.sh` checks both.
+nearest palette color until they can be allocated. The palette itself is
+required when phist starts. A later reset, by `ESC c` or `OSC 104`, allocates
+the new palette first and keeps the one in use if that fails.
+`LC_ALL=C.UTF-8 sh tests/rendering.sh` checks all of these.
 
 ## Cell size
 
