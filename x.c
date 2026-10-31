@@ -121,7 +121,7 @@ typedef struct {
 	Window win;
 	Drawable buf;
 	GlyphFontSpec *specbuf; /* font spec buffer used for rendering */
-	Atom xembed, wmdeletewin, netwmname, netwmiconname, netwmpid;
+	Atom xembed, wmprotocols, wmdeletewin, netwmname, netwmiconname, netwmpid;
 	Atom cwduri, utf8string;
 	struct {
 		XIM xim;
@@ -2395,6 +2395,7 @@ xinit(int cols, int rows)
 	XRecolorCursor(xw.dpy, cursor, &xmousefg, &xmousebg);
 
 	xw.xembed = XInternAtom(xw.dpy, "_XEMBED", False);
+	xw.wmprotocols = XInternAtom(xw.dpy, "WM_PROTOCOLS", False);
 	xw.wmdeletewin = XInternAtom(xw.dpy, "WM_DELETE_WINDOW", False);
 	xw.netwmname = XInternAtom(xw.dpy, "_NET_WM_NAME", False);
 	xw.netwmiconname = XInternAtom(xw.dpy, "_NET_WM_ICON_NAME", False);
@@ -4053,6 +4054,14 @@ kpress(XEvent *ev)
 	sendinput(buf, len, 1);
 }
 
+/* Accept close requests only in WM_PROTOCOLS format for this window. */
+static int
+xclosemessage(const XClientMessageEvent *e)
+{
+	return e->window == xw.win && e->message_type == xw.wmprotocols &&
+	       e->format == 32 && (Atom)e->data.l[0] == xw.wmdeletewin;
+}
+
 void
 cmessage(XEvent *e)
 {
@@ -4060,14 +4069,15 @@ cmessage(XEvent *e)
 	 * See xembed specs
 	 *  http://standards.freedesktop.org/xembed-spec/xembed-spec-latest.html
 	 */
-	if (e->xclient.message_type == xw.xembed && e->xclient.format == 32) {
+	if (e->xclient.window == xw.win && e->xclient.message_type == xw.xembed &&
+	    e->xclient.format == 32) {
 		if (e->xclient.data.l[1] == XEMBED_FOCUS_IN) {
 			win.mode |= MODE_FOCUSED;
 			xseturgency(0);
 		} else if (e->xclient.data.l[1] == XEMBED_FOCUS_OUT) {
 			win.mode &= ~MODE_FOCUSED;
 		}
-	} else if (e->xclient.data.l[0] == xw.wmdeletewin) {
+	} else if (xclosemessage(&e->xclient)) {
 		ttyhangup();
 		exit(0);
 	}

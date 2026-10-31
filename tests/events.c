@@ -129,9 +129,49 @@ testorigin(void)
 	puts("PASS: window positions from -g stay in range");
 }
 
+static void
+testclose(void)
+{
+	XClientMessageEvent good = { .type = ClientMessage, .window = 5, .message_type = 6,
+		.format = 32 }, e;
+
+	xw.win = 5;
+	xw.wmprotocols = 6;
+	xw.wmdeletewin = 7;
+	good.data.l[0] = 7;
+	assert(xclosemessage(&good));
+	e = good; e.window = 8;
+	assert(!xclosemessage(&e));
+	e = good; e.message_type = 9;
+	assert(!xclosemessage(&e));
+	e = good; e.format = 8;
+	assert(!xclosemessage(&e));
+	e = good; e.format = 16;
+	assert(!xclosemessage(&e));
+	e = good; e.data.l[0] = 9;
+	assert(!xclosemessage(&e));
+	puts("PASS: only WM_DELETE_WINDOW from WM_PROTOCOLS closes the window");
+
+	/* XEMBED messages are also only for this window. */
+	{
+		XEvent x = { .xclient = { .type = ClientMessage, .window = 8,
+			.message_type = 10, .format = 32 } };
+
+		xw.xembed = 10;
+		x.xclient.data.l[1] = XEMBED_FOCUS_OUT;
+		win.mode |= MODE_FOCUSED;
+		cmessage(&x);
+		assert(win.mode & MODE_FOCUSED);
+		x.xclient.window = 5;
+		cmessage(&x);
+		assert(!(win.mode & MODE_FOCUSED));
+	}
+}
+
 int
 main(void)
 {
+	testclose();
 	testwait();
 	testdispatch();
 	testorigin();

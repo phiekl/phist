@@ -35,6 +35,13 @@ milliseconds. A tty that hung up counts as ready, so its read reports it. X
 events of types beyond the core ones, which extensions deliver, are ignored.
 Run `LC_ALL=C.UTF-8 sh tests/events.sh`.
 
+Only a `WM_PROTOCOLS` client message for phist's window, in format 32 and naming
+`WM_DELETE_WINDOW`, closes the window. This keeps other messages from being
+misread; it does not authenticate other X clients.
+
+XEMBED focus messages must also name phist's window before they can
+change its focus state.
+
 ## Media Copy
 
 Application-controlled Media Copy sequences work only when phist was started
