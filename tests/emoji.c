@@ -47,7 +47,7 @@ static int extreme, extremeascent, extremedescent;
 enum { UNCOVERED = 0x100000 }; /* no font has this character or later ones */
 enum { FALLBACKONLY = 0xF0000 }; /* the fallback found for it has these */
 static XftFont textfonts[4], fallbackfont, monofont;
-static int available = 1, fixedsize, failopen, loads, livefonts, ascii_queries;
+static int available = 1, fixedsize, failopen, failafter, loads, livefonts, ascii_queries;
 
 /* Exercise the real glyph selector with deterministic font coverage/metrics. */
 void
@@ -74,7 +74,7 @@ XftFontOpenPattern(Display *d, FcPattern *pattern)
 	double size;
 
 	loads++;
-	if (failopen)
+	if (failopen || (failafter && loads > failafter))
 		return NULL;
 	assert(FcPatternGetDouble(pattern, FC_PIXEL_SIZE, 0, &size) == FcResultMatch);
 	font = calloc(1, sizeof(*font));
@@ -505,6 +505,20 @@ main(void)
 	assert(usedfontsize == 13 && win.cw == 8 && win.ch == 16 && livefonts == 4);
 	xzoomfonts(20);
 	assert(usedfontsize == 20 && win.ch == 24 && livefonts == 4);
+
+	/* Nor does failing to open any of the four, as if its file were removed. */
+	{
+		XftFont *current = dc.font.match;
+		int n, cw = win.cw;
+
+		for (n = 0; n < 4; n++) {
+			failafter = loads + n;
+			xzoomfonts(30);
+			failafter = 0;
+			assert(usedfontsize == 20 && win.cw == cw &&
+			       win.ch == 24 && livefonts == 4 && dc.font.match == current);
+		}
+	}
 
 	/* Cells stay within X's coordinates at any window size, and at least one. */
 	{

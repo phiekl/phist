@@ -133,19 +133,19 @@ the new palette first and keeps the one in use if that fails.
 
 ## Cell size
 
-The primary font's metrics, scaled by `cwscale` and `chscale`, give the size
-of a cell, which must be from 1 to 4,096 pixels. An ascent or descent beyond
-4,096 pixels either way makes a font's metrics unusable, and such values are
-never added up. A primary font without usable metrics is refused when phist
-starts, an emoji font without them is not used, and zooming to a size that
-would be outside these limits keeps the current size. X coordinates are
-16-bit, so columns and rows stop at what fits in 32,767 pixels, whatever
-size the window or `-g` asks for, and the screen stops at 4,194,304 cells in
-total, about 128 MiB for the two screens. A larger window has blank space
-beyond them. These limits apply before the terminal allocates anything for
-`-g`. If Xlib cannot allocate the window
-manager's size hints, as when zooming, the window keeps the ones it had.
-`LC_ALL=C.UTF-8 sh tests/emoji.sh` checks these limits.
+The primary font's metrics, scaled by `cwscale` and `chscale`, give the size of
+a cell, which must be from 1 to 4,096 pixels. An ascent or descent beyond 4,096
+pixels either way makes a font's metrics unusable, and such values are never
+added up. A primary font without usable metrics is refused when phist starts,
+an emoji font without them is not used, and zooming to a size that would be
+outside these limits, or whose fonts cannot be opened, keeps the current fonts.
+X coordinates are 16-bit, so columns and rows stop at what fits in
+32,767 pixels, whatever size the window or `-g` asks for, and the screen stops
+at 4,194,304 cells in total, about 128 MiB for the two screens. A larger window
+has blank space beyond them. These limits apply before the terminal allocates
+anything for `-g`. If Xlib cannot allocate the window manager's size hints, as
+when zooming, the window keeps the ones it had. `LC_ALL=C.UTF-8 sh
+tests/emoji.sh` checks these limits.
 
 ## Fallback fonts
 

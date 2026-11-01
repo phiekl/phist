@@ -50,8 +50,8 @@ static jmp_buf fontjump;
 static int fontcalls, fontprobe;
 
 /* Stop zoom at its first font operation: the renderer uses fake fonts. */
-void
-XftFontClose(Display *d, XftFont *font)
+FcPattern *
+FcNameParse(const FcChar8 *name)
 {
 	assert(fontprobe);
 	fontcalls++;
@@ -2683,6 +2683,8 @@ testmodalshortcuts(int fd)
 
 	lookuptext = "";
 	fontprobe = 1;
+	usedfont = "Test";
+	usedfontsize = 12;
 	for (mode = 0; mode < 3; mode++) {
 		if (mode == 1)
 			press(XK_slash, ControlMask);

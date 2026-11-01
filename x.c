@@ -1138,15 +1138,41 @@ zoom(const Arg *arg)
 	zoomabs(&larg);
 }
 
-/* A size whose metrics are unusable leaves the fonts at the current size. */
+static void
+xswapfonts(Font fonts[4])
+{
+	Font *loaded[] = { &dc.font, &dc.bfont, &dc.ifont, &dc.ibfont }, swap;
+	int i;
+
+	for (i = 0; i < LEN(loaded); i++) {
+		swap = *loaded[i];
+		*loaded[i] = fonts[i];
+		fonts[i] = swap;
+	}
+}
+
+/*
+ * A size that cannot be loaded leaves the fonts as they are, even if they could
+ * not be opened again.
+ */
 static void
 xzoomfonts(double size)
 {
+	Font fonts[] = { dc.font, dc.bfont, dc.ifont, dc.ibfont };
 	double current = usedfontsize;
+	int cw = win.cw, ch = win.ch;
 
+	if (xloadfonts(usedfont, size)) {
+		xswapfonts(fonts);
+		usedfontsize = current;
+		win.cw = cw;
+		win.ch = ch;
+		return;
+	}
+	/* Unload the old fonts, with what was cached for them. */
+	xswapfonts(fonts);
 	xunloadfonts();
-	if (xloadfonts(usedfont, size) && xloadfonts(usedfont, current))
-		die("can't use font %s\n", usedfont);
+	xswapfonts(fonts);
 }
 
 void
@@ -2013,7 +2039,8 @@ xsetcellsize(const Font *f)
 	return 1;
 }
 
-/* Load the fonts; return nonzero, with none loaded, if their metrics are unusable. */
+/* Load the fonts; return nonzero, with none loaded, if one cannot be opened or
+ * the metrics are unusable. */
 int
 xloadfonts(const char *fontstr, double fontsize)
 {
@@ -2027,7 +2054,7 @@ xloadfonts(const char *fontstr, double fontsize)
 		pattern = FcNameParse((const FcChar8 *)fontstr);
 
 	if (!pattern)
-		die("can't open font %s\n", fontstr);
+		return 1;
 
 	if (fontsize > 1) {
 		FcPatternDel(pattern, FC_PIXEL_SIZE);
@@ -2052,8 +2079,10 @@ xloadfonts(const char *fontstr, double fontsize)
 		defaultfontsize = usedfontsize;
 	}
 
-	if (xloadfont(&dc.font, pattern))
-		die("can't open font %s\n", fontstr);
+	if (xloadfont(&dc.font, pattern)) {
+		FcPatternDestroy(pattern);
+		return 1;
+	}
 
 	if (usedfontsize < 0) {
 		bad = FcPatternGetDouble(dc.font.match->pattern, FC_PIXEL_SIZE, 0,
@@ -2064,29 +2093,35 @@ xloadfonts(const char *fontstr, double fontsize)
 	}
 
 	/* Setting character width and height. */
-	if (bad || !xsetcellsize(&dc.font)) {
-		xunloadfont(&dc.font);
-		FcPatternDestroy(pattern);
-		return 1;
-	}
+	if (bad || !xsetcellsize(&dc.font))
+		goto nofont;
 
 	FcPatternDel(pattern, FC_SLANT);
 	FcPatternAddInteger(pattern, FC_SLANT, FC_SLANT_ITALIC);
 	if (xloadfont(&dc.ifont, pattern))
-		die("can't open font %s\n", fontstr);
+		goto nofont;
 
 	FcPatternDel(pattern, FC_WEIGHT);
 	FcPatternAddInteger(pattern, FC_WEIGHT, FC_WEIGHT_BOLD);
 	if (xloadfont(&dc.ibfont, pattern))
-		die("can't open font %s\n", fontstr);
+		goto noitalic;
 
 	FcPatternDel(pattern, FC_SLANT);
 	FcPatternAddInteger(pattern, FC_SLANT, FC_SLANT_ROMAN);
 	if (xloadfont(&dc.bfont, pattern))
-		die("can't open font %s\n", fontstr);
+		goto nobold;
 
 	FcPatternDestroy(pattern);
 	return 0;
+
+nobold:
+	xunloadfont(&dc.ibfont);
+noitalic:
+	xunloadfont(&dc.ifont);
+nofont:
+	xunloadfont(&dc.font);
+	FcPatternDestroy(pattern);
+	return 1;
 }
 
 /*
@@ -2326,7 +2361,7 @@ xopenfonts(void)
 
 	usedfont = (opt_font == NULL)? font : opt_font;
 	if (xloadfonts(usedfont, 0))
-		die("can't use font %s: unusable metrics\n", usedfont);
+		die("can't use font %s\n", usedfont);
 }
 
 void
