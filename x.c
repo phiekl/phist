@@ -120,6 +120,7 @@ typedef struct {
 	Colormap cmap;
 	Window win;
 	Drawable buf;
+	Pixmap nextbuf; /* created by cresize() for xresize() */
 	GlyphFontSpec *specbuf; /* font spec buffer used for rendering */
 	Atom xembed, wmprotocols, wmdeletewin, netwmname, netwmiconname, netwmpid;
 	Atom cwduri, utf8string;
@@ -1410,6 +1411,8 @@ typedef struct SelSend {
 } SelSend;
 static SelSend *selsends;
 static int (*xerrorprev)(Display *, XErrorEvent *);
+static int xpixmapcreating, xpixmapfailed;
+static unsigned long xpixmapserial;
 static Window embedparent; /* the window given by -w, if any */
 
 /* Requestors may vanish at any time, also during a transfer. One going
@@ -1423,6 +1426,12 @@ xerror(Display *dpy, XErrorEvent *e)
 	int own = e->resourceid == xw.win ||
 	          (embedparent && e->resourceid == embedparent);
 
+	/* Only this request's error: syncing also delivers those of earlier ones. */
+	if (xpixmapcreating && e->serial == xpixmapserial &&
+	    e->error_code == BadAlloc && e->request_code == X_CreatePixmap) {
+		xpixmapfailed = 1;
+		return 0;
+	}
 	if ((e->error_code == BadWindow && !own) ||
 	    (e->error_code == BadDrawable && e->request_code == X_GetGeometry))
 		return 0;
@@ -1742,15 +1751,40 @@ xlimitcells(int *col, int *row)
 	*row = MIN(*row, CELLS_MAX / *col);
 }
 
+/* Create a pixmap for the window's size; return None if the server refuses. */
+static Pixmap
+xcreatepixmap(void)
+{
+	Pixmap pixmap;
+
+	xpixmapfailed = 0;
+	xpixmapcreating = 1;
+	xpixmapserial = NextRequest(xw.dpy);
+	pixmap = XCreatePixmap(xw.dpy, xw.win, win.w, win.h,
+	                       DefaultDepth(xw.dpy, xw.scr));
+	XSync(xw.dpy, False);
+	xpixmapcreating = 0;
+	return xpixmapfailed ? None : pixmap;
+}
+
 void
 cresize(int width, int height)
 {
-	int col, row;
+	int col, row, oldw = win.w, oldh = win.h;
 
+	/* X refuses larger pixmaps, so what is drawn stops here. */
 	if (width != 0)
-		win.w = width;
+		win.w = MIN(width, SHRT_MAX);
 	if (height != 0)
-		win.h = height;
+		win.h = MIN(height, SHRT_MAX);
+
+	/* Without the memory, draw at the size of the buffer that exists. */
+	if (!(xw.nextbuf = xcreatepixmap())) {
+		fprintf(stderr, "can't allocate a %dx%d buffer, keeping %dx%d\n",
+		        win.w, win.h, oldw, oldh);
+		win.w = oldw;
+		win.h = oldh;
+	}
 
 	col = (win.w - 2 * borderpx) / win.cw;
 	row = (win.h - 2 * borderpx) / win.ch;
@@ -1768,10 +1802,12 @@ xresize(int col, int row)
 	win.th = row * win.ch;
 
 	vbellfree();
-	XFreePixmap(xw.dpy, xw.buf);
-	xw.buf = XCreatePixmap(xw.dpy, xw.win, win.w, win.h,
-			DefaultDepth(xw.dpy, xw.scr));
-	XftDrawChange(xw.draw, xw.buf);
+	if (xw.nextbuf) {
+		XFreePixmap(xw.dpy, xw.buf);
+		xw.buf = xw.nextbuf;
+		xw.nextbuf = None;
+		XftDrawChange(xw.draw, xw.buf);
+	}
 	xclear(0, 0, win.w, win.h);
 	/* The new buffer is blank, even when the rows and columns are unchanged. */
 	tfulldirt();
@@ -2412,8 +2448,8 @@ xinit(int cols, int rows)
 	gcvalues.graphics_exposures = False;
 	dc.gc = XCreateGC(xw.dpy, xw.win, GCGraphicsExposures,
 			&gcvalues);
-	xw.buf = XCreatePixmap(xw.dpy, xw.win, win.w, win.h,
-			DefaultDepth(xw.dpy, xw.scr));
+	if (!(xw.buf = xcreatepixmap()))
+		die("can't allocate a %dx%d buffer\n", win.w, win.h);
 	XSetForeground(xw.dpy, dc.gc, dc.col[defaultbg].pixel);
 	XFillRectangle(xw.dpy, xw.buf, dc.gc, 0, 0, win.w, win.h);
 
@@ -3657,8 +3693,7 @@ vbellrender(double progress)
 		return xw.buf;
 	progress = MAX(0, MIN(1, progress));
 	if (!vbell.buf) {
-		vbell.buf = XCreatePixmap(xw.dpy, xw.win, win.w, win.h,
-		                         DefaultDepth(xw.dpy, xw.scr));
+		vbell.buf = xcreatepixmap();
 		if (vbell.buf)
 			vbell.draw = XftDrawCreate(xw.dpy, vbell.buf, xw.vis, xw.cmap);
 	}

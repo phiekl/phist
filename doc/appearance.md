@@ -148,6 +148,16 @@ limits apply before the terminal allocates anything for `-g`. If Xlib cannot
 allocate the window manager's size hints, as when zooming, the window keeps the
 ones it had. `LC_ALL=C.UTF-8 sh tests/emoji.sh` checks these limits.
 
+Drawing buffers are limited to 32,767 pixels per dimension. If a replacement
+cannot be allocated, phist reports the failure on stderr and keeps the
+existing buffer and dimensions. Startup requires a buffer. A failed overlay
+allocation skips the visual bell; dialogs still draw directly on the window.
+Run `LC_ALL=C.UTF-8 sh tests/blink.sh` to check resize failures.
+
+Pixmap allocation errors are trapped only for the request being made,
+identified by its serial number. Errors from earlier requests delivered
+by `XSync()` still go to the previous error handler.
+
 ## Fallback fonts
 
 Characters missing from the primary font use a fallback found through

@@ -86,6 +86,7 @@ XftDraw *XftDrawCreate(Display *d, Drawable dr, Visual *v, Colormap c)
 }
 void XftDrawDestroy(Draw d) { assert(d == (Draw)3); }
 int XFreePixmap(Display *d, Pixmap p) { assert(p == 3); return 0; }
+int XSync(Display *d, Bool discard) { return 1; }
 
 int XFree(void *p) { free(p); return 0; }
 /* The server's request size in 4-byte units, with BIG-REQUESTS or without. */

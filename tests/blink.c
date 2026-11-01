@@ -14,7 +14,38 @@ void testblink_write(const char *);
 int testblink_offset(void);
 
 /* Just enough of a display for xresize(). */
-Pixmap XCreatePixmap(Display *d, Drawable w, unsigned int x, unsigned int y, unsigned int depth) { return 1; }
+static int failpixmap, stalepixmap, forwarded;
+static Pixmap lastpixmap;
+Pixmap
+XCreatePixmap(Display *d, Drawable w, unsigned int x, unsigned int y, unsigned int depth)
+{
+	assert(x <= SHRT_MAX && y <= SHRT_MAX);
+	((_XPrivDisplay)d)->request++;
+	return ++lastpixmap;
+}
+/* A real server reports a refused pixmap when the request is flushed, along
+ * with any error of a request before it. */
+int
+XSync(Display *d, Bool discard)
+{
+	XErrorEvent e = { .error_code = BadAlloc, .request_code = X_CreatePixmap };
+
+	if (stalepixmap) {
+		e.serial = ((_XPrivDisplay)d)->request - 1;
+		xerror(d, &e);
+	}
+	if (failpixmap) {
+		e.serial = ((_XPrivDisplay)d)->request;
+		xerror(d, &e);
+	}
+	return 1;
+}
+static int
+countforwarded(Display *d, XErrorEvent *e)
+{
+	forwarded++;
+	return 0;
+}
 int XFreePixmap(Display *d, Pixmap p) { return 0; }
 void XftDrawChange(XftDraw *d, Drawable dr) {}
 void XftDrawRect(XftDraw *d, const XftColor *c, int x, int y, unsigned int w, unsigned int h) {}
@@ -138,6 +169,34 @@ main(void)
 		cresize(20 * win.cw, 4 * win.ch);
 		testblink_dirty();
 		dup2(null, 2); /* no tty to resize */
+		cresize(20 * win.cw + 7, 4 * win.ch + 3);
+		assert(win.w == 20 * win.cw + 7 && win.h == 4 * win.ch + 3);
+		/* A refused resize preserves the existing buffer and dimensions. */
+		failpixmap = 1;
+		cresize(30 * win.cw, 6 * win.ch);
+		assert(win.w == 20 * win.cw + 7 && win.h == 4 * win.ch + 3);
+		assert(!xw.nextbuf && win.tw == 20 * win.cw && win.th == 4 * win.ch);
+		failpixmap = 0;
+		assert(!forwarded);
+		/* An earlier request's error is not this one's, and goes on as before. */
+		xerrorprev = countforwarded;
+		stalepixmap = 1;
+		cresize(25 * win.cw, 5 * win.ch);
+		stalepixmap = 0;
+		assert(forwarded == 1 && win.w == 25 * win.cw && xw.buf == lastpixmap);
+		/* So does one when no pixmap is being created. */
+		{
+			XErrorEvent e = { .error_code = BadAlloc, .request_code = X_CreatePixmap,
+				.serial = ((_XPrivDisplay)xw.dpy)->request };
+
+			xerror(xw.dpy, &e);
+			assert(forwarded == 2 && !xpixmapfailed);
+		}
+		/* Nothing asks for a pixmap X refuses, whatever the window's size. */
+		cresize(40000, 4 * win.ch);
+		assert(win.w == SHRT_MAX && win.h == 4 * win.ch);
+		cresize(20 * win.cw, 40000);
+		assert(win.w == 20 * win.cw && win.h == SHRT_MAX);
 		cresize(20 * win.cw + 7, 4 * win.ch + 3);
 		dup2(err, 2);
 		close(err);

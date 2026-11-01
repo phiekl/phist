@@ -166,6 +166,8 @@ XCreatePixmap(Display *d, Drawable parent, unsigned int w, unsigned int h,
 	abort();
 }
 
+int XSync(Display *d, Bool discard) { return 1; }
+
 int
 XFreePixmap(Display *d, Pixmap pixmap)
 {
@@ -413,7 +415,8 @@ main(void)
 	for (i = 0; i < LEN(sizes); i++) {
 		win.w = sizes[i][0];
 		win.h = sizes[i][1];
-		xresize(win.w, win.h);
+		xw.nextbuf = xcreatepixmap();
+	xresize(win.w, win.h);
 		assert(!vbell.buf && !vbell.draw && draws == 1);
 		background();
 		vbellset = 1;
@@ -425,6 +428,7 @@ main(void)
 	/* All animation modes begin/end transparent and restore the original buffer. */
 	win.w = W;
 	win.h = H;
+	xw.nextbuf = xcreatepixmap();
 	xresize(win.w, win.h);
 	background();
 	vbellwidth = 40;
@@ -517,7 +521,8 @@ main(void)
 			vbelleffect = effect;
 			win.w = sizes[i][0];
 			win.h = sizes[i][1];
-			xresize(win.w, win.h);
+			xw.nextbuf = xcreatepixmap();
+	xresize(win.w, win.h);
 			assert(!vbell.buf && !vbell.draw);
 			background();
 			vbellset = 1;
