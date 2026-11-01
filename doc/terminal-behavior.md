@@ -66,6 +66,24 @@ stderr; the terminal and its shell carry on. phist ignores `SIGPIPE`, also
 without `-o` for the sake of stderr, but programs in the terminal still get
 the default.
 
+A regular file takes output directly. Other output, including a terminal or
+socket, goes through a queue in the main loop to a small writer process over
+a nonblocking pipe. Only that process waits for the reader, so neither a
+stalled reader nor another writer filling the same pipe stops the terminal.
+`O_NONBLOCK` on the output itself would be shared with the launching shell
+for `-o -`.
+
+If 1 MiB is waiting in the queue, printing ends with a message on stderr, so
+the record stops rather than having gaps; a single dump larger than 1 MiB
+ends it straight away. Output in the queue when phist exits is lost. What the writer already has
+still reaches the reader, so the writer stays until the reader takes it or goes
+away.
+
+The writer closes everything it inherits, so it can't keep the X connection open
+after phist exits. That takes `/proc/self/fd`. Without it, as in a chroot with
+no `/proc`, printing to anything but a regular file stops with a message on
+stderr.
+
 ## Keyboard locking
 
 KAM (`CSI 2 h` / `CSI 2 l`) is ignored. An application or printed file

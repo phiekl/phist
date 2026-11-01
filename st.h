@@ -111,6 +111,8 @@ size_t ttyread(void);
 void ttyreply(const char *, size_t);
 int ttywritepending(void);
 void ttyflushwrites(void);
+int ttyprintfd(void);
+void ttyflushprint(void);
 void ttyresize(int, int);
 void ttywrite(const char *, size_t, int);
 int ttyinputfits(size_t);

@@ -1,9 +1,11 @@
 /* See LICENSE for license details. */
 #include <arpa/inet.h>
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <poll.h>
 #include <pwd.h>
 #include <regex.h>
 #include <stdarg.h>
@@ -14,6 +16,7 @@
 #include <strings.h>
 #include <signal.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <sys/select.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -54,6 +57,7 @@
 #define HLINK_BUCKETS  16384    /* hash chains stay short at the slot limit */
 #define ERRESC_BURST  20        /* diagnostics printed before rate limiting */
 #define ERRESC_RATE   5         /* diagnostics per second after a burst */
+#define PRINT_MAX     (1 << 20) /* bytes of -o output waiting for a reader */
 #define REPLY_MAX     4096      /* bytes of query replies waiting for the child */
 #define INPUT_MAX     (64 * 1024 * 1024) /* queued-input limit; an empty queue accepts one larger input */
 #define DUMP_MAX      128       /* bytes of a sequence shown in a diagnostic */
@@ -212,6 +216,7 @@ static char *strtitle(char *);
 static void strreset(void);
 
 static void tprinter(char *, size_t);
+static void printwriter(void);
 static void tdumpsel(void);
 static void tdumpline(Line);
 static void tdump(void);
@@ -3207,6 +3212,7 @@ ttynew(const char *line, char *cmd, const char *out, char **args, const char *di
 			fprintf(stderr, "Error opening %s:%s\n",
 				out, strerror(errno));
 		}
+		printwriter();
 	}
 
 	if (line) {
@@ -3283,6 +3289,7 @@ ttyread(void)
 		buflen += ret;
 		written = twrite(buf, buflen, 0);
 		buflen -= written;
+		ttyflushprint();
 		/* keep any incomplete UTF-8 byte sequence for the next call */
 		if (buflen > 0)
 			memmove(buf, buf + written, buflen);
@@ -5112,14 +5119,212 @@ strreset(void)
 	};
 }
 
+/*
+ * Printing runs inside the parser. A file takes the output directly, but a
+ * pipe's reader may take any length of time to read it, which must not stop
+ * the terminal. Other output waits here for the main loop, and past PRINT_MAX
+ * printing ends, for a record that stops rather than one with gaps. Output
+ * still waiting when phist exits is lost. The main loop passes it to a writer
+ * process over a nonblocking pipe, since poll() can't promise room in a pipe
+ * with other writers, and O_NONBLOCK on the output would also apply to
+ * whoever shares stdout for -o -.
+ */
+static struct {
+	char *buf;
+	size_t off, len, cap;
+} printq;
+
+static void
+printstop(void)
+{
+	close(iofd);
+	iofd = -1;
+	free(printq.buf);
+	memset(&printq, 0, sizeof(printq));
+}
+
+static int
+printdirect(void)
+{
+	struct stat st;
+
+	return !fstat(iofd, &st) && S_ISREG(st.st_mode);
+}
+
+static const char *printfdlist = "/proc/self/fd";
+
+/* The highest open descriptor, or -1 if the system doesn't say. No limit can
+ * stand in for this, as a descriptor can stay open above any limit lowered later. */
+static long
+printwriterlastfd(void)
+{
+	struct dirent *entry;
+	DIR *dir;
+	long fd, last = -1;
+
+	if (!(dir = opendir(printfdlist)))
+		return -1;
+	errno = 0;
+	while ((entry = readdir(dir))) {
+		fd = atol(entry->d_name);
+		last = MAX(last, fd);
+	}
+	if (errno)
+		last = -1;
+	closedir(dir);
+	return last;
+}
+
+/* Copy to the output until phist is done with it. Only this process waits for
+ * the reader. A descriptor left open here could keep phist's window up, and the
+ * pipe's own write end would keep this process from seeing the end of its input,
+ * so it goes first, also leaving room to list the others. */
+static void
+printwriterrun(int in, int wr, int out)
+{
+	struct pollfd room = { .fd = out, .events = POLLOUT };
+	char buf[BUFSIZ];
+	long fd, last;
+	ssize_t n, r, off;
+
+	close(wr);
+	if ((last = printwriterlastfd()) < 0) {
+		fprintf(stderr, "Can't close inherited descriptors: stopped printing\n");
+		_exit(1);
+	}
+	for (fd = 0; fd <= last; fd++) {
+		if (fd != in && fd != out && fd != STDERR_FILENO)
+			close(fd);
+	}
+	while ((n = read(in, buf, sizeof(buf))) != 0) {
+		if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			_exit(1);
+		}
+		for (off = 0; off < n; off += r) {
+			r = write(out, buf + off, n - off);
+			if (r >= 0)
+				continue;
+			r = 0;
+			/* stdout can already be nonblocking for -o -. */
+			if (errno == EAGAIN || errno == EWOULDBLOCK)
+				poll(&room, 1, -1);
+			else if (errno != EINTR) {
+				perror("Error writing to output file");
+				_exit(1);
+			}
+		}
+	}
+	_exit(0);
+}
+
+/* Have a writer process take over any output but a regular file. It is orphaned,
+ * so that it neither waits as a zombie nor signals phist's SIGCHLD handler. */
+static void
+printwriter(void)
+{
+	int fds[2], failed, null, status;
+	pid_t child;
+
+	if (iofd < 0 || printdirect())
+		return;
+	if (pipe(fds) < 0) {
+		perror("Error starting output writer");
+		printstop();
+		return;
+	}
+	child = fork();
+	if (!child) {
+		child = fork();
+		if (child)
+			_exit(child < 0);
+		printwriterrun(fds[0], fds[1], iofd);
+	}
+	close(fds[0]);
+	status = 1;
+	failed = child < 0;
+	while (child > 0 && (failed = waitpid(child, &status, 0) < 0) && errno == EINTR)
+		;
+	/* errno only says why if the failure was here, and not in the child. */
+	if (failed)
+		perror("Error starting output writer");
+	else if (status)
+		fprintf(stderr, "Error starting output writer\n");
+	if (failed || status) {
+		close(fds[1]);
+		printstop();
+		return;
+	}
+	fcntl(fds[1], F_SETFL, fcntl(fds[1], F_GETFL) | O_NONBLOCK);
+	fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+	/* Only the writer holds the output now, so its end reaches the reader.
+	 * fd 1 stays open, or the next file opened would become stdout. */
+	if (iofd == STDOUT_FILENO && (null = open("/dev/null", O_WRONLY)) >= 0) {
+		dup2(null, STDOUT_FILENO);
+		close(null);
+	} else {
+		close(iofd);
+	}
+	iofd = fds[1];
+}
+
 void
 tprinter(char *s, size_t len)
 {
-	if (iofd != -1 && xwrite(iofd, s, len) < 0) {
-		perror("Error writing to output file");
-		close(iofd);
-		iofd = -1;
+	if (iofd == -1)
+		return;
+	if (printdirect()) {
+		if (xwrite(iofd, s, len) < 0) {
+			perror("Error writing to output file");
+			printstop();
+		}
+		return;
 	}
+	if (len > PRINT_MAX - printq.len) {
+		fprintf(stderr, "Output file not reading: stopped printing "
+		        "after %d bytes waited\n", PRINT_MAX);
+		printstop();
+		return;
+	}
+	if (printq.off) {
+		memmove(printq.buf, printq.buf + printq.off, printq.len);
+		printq.off = 0;
+	}
+	if (printq.len + len > printq.cap) {
+		printq.cap = MIN(MAX(4096, MAX(printq.cap * 2, printq.len + len)), PRINT_MAX);
+		printq.buf = xrealloc(printq.buf, printq.cap);
+	}
+	memcpy(printq.buf + printq.len, s, len);
+	printq.len += len;
+}
+
+int
+ttyprintfd(void)
+{
+	return printq.len ? iofd : -1;
+}
+
+/* Pass on what the writer has room for. Without a writer, it reported why. */
+void
+ttyflushprint(void)
+{
+	ssize_t r;
+
+	while (printq.len) {
+		r = write(iofd, printq.buf + printq.off, printq.len);
+		if (r < 0) {
+			if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+				return;
+			if (errno != EPIPE)
+				perror("Error writing to output file");
+			printstop();
+			return;
+		}
+		printq.off += r;
+		printq.len -= r;
+	}
+	printq.off = 0;
 }
 
 void
