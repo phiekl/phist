@@ -2446,8 +2446,8 @@ xinit(int cols, int rows)
 
 	memset(&gcvalues, 0, sizeof(gcvalues));
 	gcvalues.graphics_exposures = False;
-	dc.gc = XCreateGC(xw.dpy, xw.win, GCGraphicsExposures,
-			&gcvalues);
+	if (!(dc.gc = XCreateGC(xw.dpy, xw.win, GCGraphicsExposures, &gcvalues)))
+		die("can't create graphics context\n");
 	if (!(xw.buf = xcreatepixmap()))
 		die("can't allocate a %dx%d buffer\n", win.w, win.h);
 	XSetForeground(xw.dpy, dc.gc, dc.col[defaultbg].pixel);

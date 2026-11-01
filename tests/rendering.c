@@ -5,7 +5,7 @@
 #undef main
 
 static int allocations, frees, failalloc, fills;
-static int contexts, freedcontexts;
+static int contexts, freedcontexts, failcontext, clipresets;
 static unsigned long stroke;
 static unsigned long painted[2100];
 static unsigned long backgrounds[2100];
@@ -52,7 +52,7 @@ XftDrawRect(XftDraw *d, const XftColor *c, int x, int y, unsigned int w, unsigne
 	}
 }
 Bool XftDrawSetClipRectangles(XftDraw *d, int x, int y, const XRectangle *r, int n) { return 1; }
-Bool XftDrawSetClip(XftDraw *d, Region r) { return 1; }
+Bool XftDrawSetClip(XftDraw *d, Region r) { clipresets++; return 1; }
 void
 XftDrawGlyphFontSpec(XftDraw *d, const XftColor *c, const XftGlyphFontSpec *s, int n)
 {
@@ -68,8 +68,8 @@ XftDrawGlyphFontSpec(XftDraw *d, const XftColor *c, const XftGlyphFontSpec *s, i
 	}
 }
 Drawable XftDrawDrawable(XftDraw *d) { return 1; }
-GC XCreateGC(Display *d, Drawable dr, unsigned long mask, XGCValues *v) { contexts++; return (GC)1; }
-int XChangeGC(Display *d, GC gc, unsigned long mask, XGCValues *v) { stroke = v->foreground; return 0; }
+GC XCreateGC(Display *d, Drawable dr, unsigned long mask, XGCValues *v) { if (failcontext) return NULL; contexts++; return (GC)1; }
+int XChangeGC(Display *d, GC gc, unsigned long mask, XGCValues *v) { assert(gc); stroke = v->foreground; return 0; }
 int XFreeGC(Display *d, GC gc) { freedcontexts++; return 0; }
 int XFillRectangle(Display *d, Drawable dr, GC gc, int x, int y, unsigned int w, unsigned int h) { fills++; return 0; }
 static short undercurly;
@@ -482,6 +482,29 @@ testpalette(void)
 	puts("PASS: a failed palette reset keeps the palette in use");
 }
 
+/* Without a context, text loses only its underline, and nothing leaks. */
+static void
+testunderlinecontext(void)
+{
+	XftGlyphFontSpec spec = {0};
+	Glyph base = { .u = 'x', .fg = TRUECOLOR(9, 8, 7), .bg = TRUECOLOR(1, 2, 3),
+		.ucolor = UCOLOR_DEFAULT, .mode = ATTR_UNDERLINE };
+	GC saved = dc.ugc;
+	int before = fills, resets = clipresets, allocated = allocations, freed = frees;
+
+	failalloc = 0;
+	dc.ugc = NULL;
+	failcontext = 1;
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(!dc.ugc && fills == before && clipresets == resets + 1);
+	assert(allocations - allocated == frees - freed && allocations > allocated);
+	failcontext = 0;
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	assert(dc.ugc && fills > before);
+	dc.ugc = saved;
+	puts("PASS: a failed underline context skips the underline and leaks nothing");
+}
+
 int
 main(void)
 {
@@ -614,5 +637,6 @@ main(void)
 	testconcealedurl();
 	testundercurl();
 	testpalette();
+	testunderlinecontext();
 	return 0;
 }

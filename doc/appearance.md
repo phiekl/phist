@@ -300,3 +300,11 @@ other application redraws.
 A manual stress check is `timeout 3 yes "$(printf '\033[?5h\033[?5l')"`. The
 mouse/event suite checks dirty marking and the following frame through the
 terminal parser.
+
+## Drawing resources
+
+Startup requires a drawing buffer, an Xft drawing context and an X
+graphics context. Failure to create any of them is reported before
+drawing starts. The underline graphics context is optional and created
+lazily; failure omits the underline while preserving the text and
+releasing temporary colors.
