@@ -520,6 +520,37 @@ main(void)
 		}
 	}
 
+	/* A default of 1, also in points, can be restored after zooming in. */
+	{
+		const char *small[] = { "Test:pixelsize=1", "Test:size=1" };
+		int n;
+
+		for (n = 0; n < LEN(small); n++) {
+			xunloadfonts();
+			usedfont = small[n];
+			assert(!xloadfonts(usedfont, 0) && defaultfontsize > 0);
+			{
+				double before = defaultfontsize, size = usedfontsize;
+
+				xzoomfonts(20);
+				assert(usedfontsize == 20 && defaultfontsize == before);
+				xzoomfonts(0);
+				assert(usedfontsize == size && defaultfontsize == before &&
+				       livefonts == 4);
+				/* Failing to does not lose it, or the fonts. */
+				failopen = 1;
+				xzoomfonts(0);
+				failopen = 0;
+				assert(usedfontsize == size && defaultfontsize == before &&
+				       livefonts == 4);
+			}
+		}
+		xunloadfonts();
+		usedfont = "Test:pixelsize=13";
+		assert(!xloadfonts(usedfont, 0));
+		xzoomfonts(20);
+	}
+
 	/* Cells stay within X's coordinates at any window size, and at least one. */
 	{
 		int col, row;

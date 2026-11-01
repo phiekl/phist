@@ -2705,6 +2705,17 @@ testmodalshortcuts(int fd)
 		if (mode)
 			press(XK_Escape, 0);
 	}
+	/* Zooming out stops above 1, where sizes mean the font's own... */
+	before = fontcalls;
+	usedfontsize = 2;
+	press(XK_minus, ControlMask);
+	assert(fontcalls == before && usedfontsize == 2);
+	/* ...but a default of 1 can still be restored. */
+	defaultfontsize = 1;
+	if (!setjmp(fontjump))
+		press(XK_0, ControlMask);
+	assert(fontcalls == before + 1);
+	defaultfontsize = 0;
 	fontprobe = 0;
 	lookuptext = "x";
 	expect(fd, NULL);

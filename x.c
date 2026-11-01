@@ -1135,7 +1135,9 @@ zoom(const Arg *arg)
 	Arg larg;
 
 	larg.f = usedfontsize + arg->f;
-	zoomabs(&larg);
+	/* xloadfonts() takes a size of 1 or less to mean the font's own size. */
+	if (larg.f > 1)
+		zoomabs(&larg);
 }
 
 static void
@@ -1159,12 +1161,13 @@ static void
 xzoomfonts(double size)
 {
 	Font fonts[] = { dc.font, dc.bfont, dc.ifont, dc.ibfont };
-	double current = usedfontsize;
+	double current = usedfontsize, currentdefault = defaultfontsize;
 	int cw = win.cw, ch = win.ch;
 
 	if (xloadfonts(usedfont, size)) {
 		xswapfonts(fonts);
 		usedfontsize = current;
+		defaultfontsize = currentdefault;
 		win.cw = cw;
 		win.ch = ch;
 		return;
@@ -1190,7 +1193,8 @@ zoomreset(const Arg *arg)
 	Arg larg;
 
 	if (defaultfontsize > 0) {
-		larg.f = defaultfontsize;
+		/* A default of 1 or less can only be asked for as the font's own. */
+		larg.f = defaultfontsize > 1 ? defaultfontsize : 0;
 		zoomabs(&larg);
 	}
 }
