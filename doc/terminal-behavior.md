@@ -90,6 +90,10 @@ ends it straight away. Output in the queue when phist exits is lost. What the wr
 still reaches the reader, so the writer stays until the reader takes it or goes
 away.
 
+A FIFO without a reader doesn't hold up startup either. The writer waits for a
+reader, while output collects in the queue, and gives up when phist exits. A
+reader that comes later gets the output from the start.
+
 The writer closes everything it inherits, so it can't keep the X connection open
 after phist exits. That takes `/proc/self/fd`. Without it, as in a chroot with
 no `/proc`, printing to anything but a regular file stops with a message on

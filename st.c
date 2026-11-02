@@ -216,7 +216,7 @@ static char *strtitle(char *);
 static void strreset(void);
 
 static void tprinter(char *, size_t);
-static void printwriter(void);
+static void printopen(const char *);
 static void tdumpsel(void);
 static void tdumpline(Line);
 static void tdump(void);
@@ -3213,13 +3213,7 @@ ttynew(const char *line, char *cmd, const char *out, char **args, const char *di
 	if (out) {
 		term.mode |= MODE_PRINT;
 		mcallowed = 1;
-		iofd = (!strcmp(out, "-")) ?
-			  1 : open(out, O_WRONLY | O_CREAT, 0666);
-		if (iofd < 0) {
-			fprintf(stderr, "Error opening %s:%s\n",
-				out, strerror(errno));
-		}
-		printwriter();
+		printopen(out);
 	}
 
 	if (line) {
@@ -5228,14 +5222,32 @@ printwriterlastfd(void)
 	return last;
 }
 
+/* Wait for a reader to open the FIFO, for as long as phist has output for it. */
+static int
+printwriterfifo(int in, const char *fifo)
+{
+	struct pollfd done = { .fd = in };
+	int fd;
+
+	while ((fd = open(fifo, O_WRONLY | O_NONBLOCK)) < 0) {
+		if (errno != ENXIO && errno != EINTR) {
+			perror("Error opening output file");
+			_exit(1);
+		}
+		if (poll(&done, 1, 250) > 0 && (done.revents & POLLHUP))
+			_exit(0);
+	}
+	return fd;
+}
+
 /* Copy to the output until phist is done with it. Only this process waits for
  * the reader. A descriptor left open here could keep phist's window up, and the
  * pipe's own write end would keep this process from seeing the end of its input,
  * so it goes first, also leaving room to list the others. */
 static void
-printwriterrun(int in, int wr, int out)
+printwriterrun(int in, int wr, int out, const char *fifo)
 {
-	struct pollfd room = { .fd = out, .events = POLLOUT };
+	struct pollfd room = { .events = POLLOUT };
 	char buf[BUFSIZ];
 	long fd, last;
 	ssize_t n, r, off;
@@ -5249,6 +5261,9 @@ printwriterrun(int in, int wr, int out)
 		if (fd != in && fd != out && fd != STDERR_FILENO)
 			close(fd);
 	}
+	if (fifo)
+		out = printwriterfifo(in, fifo);
+	room.fd = out;
 	while ((n = read(in, buf, sizeof(buf))) != 0) {
 		if (n < 0) {
 			if (errno == EINTR)
@@ -5275,12 +5290,12 @@ printwriterrun(int in, int wr, int out)
 /* Have a writer process take over any output but a regular file. It is orphaned,
  * so that it neither waits as a zombie nor signals phist's SIGCHLD handler. */
 static void
-printwriter(void)
+printwriter(const char *fifo)
 {
 	int fds[2], failed, null, status;
 	pid_t child;
 
-	if (iofd < 0 || printdirect())
+	if (!fifo && (iofd < 0 || printdirect()))
 		return;
 	if (pipe(fds) < 0) {
 		perror("Error starting output writer");
@@ -5292,7 +5307,7 @@ printwriter(void)
 		child = fork();
 		if (child)
 			_exit(child < 0);
-		printwriterrun(fds[0], fds[1], iofd);
+		printwriterrun(fds[0], fds[1], iofd, fifo);
 	}
 	close(fds[0]);
 	status = 1;
@@ -5316,10 +5331,34 @@ printwriter(void)
 	if (iofd == STDOUT_FILENO && (null = open("/dev/null", O_WRONLY)) >= 0) {
 		dup2(null, STDOUT_FILENO);
 		close(null);
-	} else {
+	} else if (iofd >= 0) {
 		close(iofd);
 	}
 	iofd = fds[1];
+}
+
+/* Open without waiting: a FIFO without a reader would hold up the terminal, and
+ * the writer waits for one instead. Only the opening has to be nonblocking. */
+static void
+printopen(const char *out)
+{
+	const char *fifo = NULL;
+	struct stat st;
+	int err;
+
+	if (!strcmp(out, "-")) {
+		iofd = STDOUT_FILENO;
+	} else if ((iofd = open(out, O_WRONLY | O_CREAT | O_NONBLOCK, 0666)) >= 0) {
+		fcntl(iofd, F_SETFL, fcntl(iofd, F_GETFL) & ~O_NONBLOCK);
+	} else {
+		err = errno;
+		if (err == ENXIO && !stat(out, &st) && S_ISFIFO(st.st_mode)) {
+			fifo = out;
+		} else {
+			fprintf(stderr, "Error opening %s:%s\n", out, strerror(err));
+		}
+	}
+	printwriter(fifo);
 }
 
 void

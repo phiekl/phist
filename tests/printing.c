@@ -1,6 +1,7 @@
 #include "terminal.h"
 #include <sys/resource.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 
 static void
 dump_is(const char *expected, const char *request)
@@ -96,7 +97,7 @@ testslowreader(void)
 	fcntl(fds[0], F_SETFL, O_NONBLOCK);
 	iofd = fds[1];
 	alarm(20);
-	printwriter();
+	printwriter(NULL);
 	memset(block, 'x', sizeof(block));
 	for (i = 0; i < 4; i++) {
 		tprinter(block, sizeof(block));
@@ -145,7 +146,7 @@ teststalled(int rd, int wr, int fill)
 		assert(errno == EAGAIN);
 	}
 	iofd = wr;
-	printwriter();
+	printwriter(NULL);
 	assert(iofd != -1 && iofd != wr && (fcntl(iofd, F_GETFL) & O_NONBLOCK));
 	for (i = 0; iofd != -1 && i < 2 * PRINT_MAX / (int)sizeof(block); i++) {
 		tprinter(block, sizeof(block));
@@ -184,7 +185,7 @@ testsharedstdout(void)
 		assert(dup2(fds[1], STDOUT_FILENO) == STDOUT_FILENO);
 		close(fds[1]);
 		iofd = STDOUT_FILENO;
-		printwriter();
+		printwriter(NULL);
 		assert(iofd != STDOUT_FILENO);
 		assert(!(fcntl(STDOUT_FILENO, F_GETFL) & O_NONBLOCK));
 		tprinter("ok", 2);
@@ -232,7 +233,7 @@ testinheritedhighfd(int listed)
 		iofd = out[1];
 		if (!listed)
 			printfdlist = "/nonexistent";
-		printwriter();
+		printwriter(NULL);
 		close(HIGH);
 		/* With or without the writer still running, this is the end of file. */
 		assert(read(marker[0], text, sizeof(text)) == 0);
@@ -326,6 +327,74 @@ testignoredsigchld(void)
 	close(err[0]);
 }
 
+/* A FIFO without a reader holds up neither startup nor the output, which the
+ * reader gets when it comes. If none does, the writer doesn't stay for it. Only
+ * a FIFO gets to wait, and a regular file still takes output directly. */
+static void
+testfifo(void)
+{
+	char dir[32], path[64], other[64], text[16];
+	char *args[] = { "/bin/sh", "-c", "sleep 0.1", NULL };
+	struct sockaddr_un addr = { .sun_family = AF_UNIX };
+	struct stat st;
+	int fd, marker[2], saved, sock, status;
+	pid_t child;
+
+	snprintf(dir, sizeof(dir), "/tmp/phist-print%d", (int)getpid());
+	assert(mkdir(dir, 0700) == 0);
+	snprintf(path, sizeof(path), "%s/fifo", dir);
+	assert(mkfifo(path, 0600) == 0);
+	child = fork();
+	assert(child >= 0);
+	if (!child) {
+		alarm(10);
+		termname = "dumb";
+		ttynew(NULL, "/bin/sh", path, args, NULL);
+		signal(SIGCHLD, SIG_DFL);
+		assert(iofd >= 0);
+		tprinter("late", 4);
+		ttyflushprint();
+		fd = open(path, O_RDONLY);
+		assert(fd >= 0 && read(fd, text, sizeof(text)) == 4);
+		assert(!memcmp(text, "late", 4));
+		printstop();
+		assert(read(fd, text, sizeof(text)) == 0);
+		close(fd);
+
+		/* The writer alone keeps this open through its stderr. */
+		assert(pipe(marker) == 0);
+		saved = dup(STDERR_FILENO);
+		dup2(marker[1], STDERR_FILENO);
+		close(marker[1]);
+		printopen(path);
+		dup2(saved, STDERR_FILENO);
+		close(saved);
+		assert(iofd >= 0);
+		printstop();
+		assert(read(marker[0], text, sizeof(text)) == 0);
+
+		snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/sock", dir);
+		sock = socket(AF_UNIX, SOCK_STREAM, 0);
+		assert(sock >= 0 && !bind(sock, (struct sockaddr *)&addr, sizeof(addr)));
+		printopen(addr.sun_path);
+		assert(iofd == -1);
+		close(sock);
+		unlink(addr.sun_path);
+
+		snprintf(other, sizeof(other), "%s/file", dir);
+		printopen(other);
+		assert(!fstat(iofd, &st) && S_ISREG(st.st_mode));
+		assert(!(fcntl(iofd, F_GETFL) & O_NONBLOCK));
+		printstop();
+		unlink(other);
+		_exit(7);
+	}
+	assert(waitpid(child, &status, 0) == child);
+	assert(WIFEXITED(status) && WEXITSTATUS(status) == 7);
+	unlink(path);
+	rmdir(dir);
+}
+
 int
 main(void)
 {
@@ -355,6 +424,7 @@ main(void)
 	testsharedstdout();
 	testignoredsigchld();
 	testwriterforkfails();
+	testfifo();
 	testinheritedhighfd(1);
 	testinheritedhighfd(0);
 	reset(20, 3);
