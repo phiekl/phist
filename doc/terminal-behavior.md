@@ -42,6 +42,17 @@ misread; it does not authenticate other X clients.
 XEMBED focus messages must also name phist's window before they can
 change its focus state.
 
+## Exit status
+
+phist exits with 0 if its shell exits with 0, and with 1 if the shell exits with
+any other status or is killed by a signal. Run `LC_ALL=C.UTF-8 sh
+tests/shellexit.sh` to check. A shell that closes the terminal and keeps running
+ends phist a second later with an error on stderr and status 1.
+
+The shell's exit handler is installed before forking. `SIGCHLD` remains
+blocked until the shell PID is recorded, then is unblocked even if the
+launcher blocked it. The shell also starts with `SIGCHLD` unblocked.
+
 ## Media Copy
 
 Application-controlled Media Copy sequences work only when phist was started

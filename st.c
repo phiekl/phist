@@ -3120,6 +3120,14 @@ execsh(char *cmd, char **args)
 	_exit(1);
 }
 
+static void
+exitlikeshell(int stat)
+{
+	if ((WIFEXITED(stat) && WEXITSTATUS(stat)) || WIFSIGNALED(stat))
+		_exit(1);
+	_exit(0);
+}
+
 void
 sigchld(int a)
 {
@@ -3139,9 +3147,7 @@ sigchld(int a)
 		return;
 	}
 
-	if ((WIFEXITED(stat) && WEXITSTATUS(stat)) || WIFSIGNALED(stat))
-		_exit(1);
-	_exit(0);
+	exitlikeshell(stat);
 }
 
 /* Run stty_args, split at blanks, and args without a shell to reparse them. */
@@ -3195,6 +3201,7 @@ stty(char **args)
 int
 ttynew(const char *line, char *cmd, const char *out, char **args, const char *dir)
 {
+	sigset_t chld, mask;
 	int m, s;
 
 	/* An inherited SIG_IGN would prevent waiting for the child's status. */
@@ -3230,11 +3237,25 @@ ttynew(const char *line, char *cmd, const char *out, char **args, const char *di
 	if (openpty(&m, &s, NULL, NULL, NULL) < 0)
 		die("openpty failed: %s\n", strerror(errno));
 
+	/*
+	 * Install the handler before forking, so a shell exiting at once isn't
+	 * missed, and block SIGCHLD until fork() has returned, so the handler
+	 * knows which child is the shell.
+	 */
+	sigemptyset(&chld);
+	sigaddset(&chld, SIGCHLD);
+	sigprocmask(SIG_BLOCK, &chld, &mask);
+	signal(SIGCHLD, sigchld);
+
 	switch (pid = fork()) {
 	case -1:
 		die("fork failed: %s\n", strerror(errno));
 		break;
 	case 0:
+		signal(SIGCHLD, SIG_DFL);
+		/* The shell gets what phist was started with, minus SIGCHLD. */
+		sigdelset(&mask, SIGCHLD);
+		sigprocmask(SIG_SETMASK, &mask, NULL);
 		close(iofd);
 		close(m);
 		setsid(); /* create a new process group */
@@ -3261,10 +3282,39 @@ ttynew(const char *line, char *cmd, const char *out, char **args, const char *di
 #endif
 		close(s);
 		cmdfd = m;
-		signal(SIGCHLD, sigchld);
+		sigprocmask(SIG_UNBLOCK, &chld, NULL);
 		break;
 	}
 	return cmdfd;
+}
+
+/*
+ * The shell's end of the pty closes just before the shell counts as exited,
+ * so EIO usually comes first: wait up to a second for it to exit. With
+ * SIGCHLD blocked, the handler can't reap the shell in between and leave
+ * waitpid() nothing to find. A shell still running has only closed the
+ * terminal, and the read error is reported.
+ */
+static void
+ttywaitshell(void)
+{
+	struct timespec tick = { .tv_nsec = 10000000 };
+	sigset_t chld;
+	pid_t p;
+	int i, stat;
+
+	sigemptyset(&chld);
+	sigaddset(&chld, SIGCHLD);
+	sigprocmask(SIG_BLOCK, &chld, NULL);
+	for (i = 0; i < 100; i++) {
+		p = waitpid(pid, &stat, WNOHANG);
+		if (p == pid)
+			exitlikeshell(stat);
+		if (p < 0 && errno != EINTR)
+			break;
+		nanosleep(&tick, NULL);
+	}
+	errno = EIO;
 }
 
 size_t
@@ -3284,6 +3334,8 @@ ttyread(void)
 	case 0:
 		exit(0);
 	case -1:
+		if (errno == EIO && pid > 0)
+			ttywaitshell();
 		die("couldn't read from shell: %s\n", strerror(errno));
 	default:
 		buflen += ret;
