@@ -2410,7 +2410,7 @@ xinit(int cols, int rows)
 	XGCValues gcvalues;
 	Cursor cursor;
 	Window parent, root;
-	pid_t thispid = getpid();
+	long thispid = getpid(); /* format 32 properties are arrays of long */
 	XColor xmousefg, xmousebg;
 
 	/* colors */

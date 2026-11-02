@@ -112,3 +112,11 @@ example `phist -g 80x24-10+20`. Negative position offsets are relative
 to the far edge of the screen. Offsets are clamped to X11's signed
 16-bit range before and after resolving them against the screen size,
 avoiding overflow during adjustment.
+
+## Window and process IDs
+
+phist exports its window ID as `WINDOWID` and publishes its process ID
+in the `_NET_WM_PID` property. The latter has type `CARDINAL` and format
+32. Xlib expects format-32 property data as an array of `long`, so the
+process ID is stored as a `long` before publishing it, avoiding a read
+past a narrower `pid_t`.
