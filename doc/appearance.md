@@ -129,6 +129,10 @@ The fixed colors of concealed and low-contrast text, dialogs and bars use the
 nearest palette color until they can be allocated. The palette itself is
 required when phist starts. A later reset, by `ESC c` or `OSC 104`, allocates
 the new palette first and keeps the one in use if that fails.
+Resetting the entire palette with `OSC 104` marks the screen for redraw,
+so existing text immediately uses the restored colors, just as for a
+single-color reset.
+
 `LC_ALL=C.UTF-8 sh tests/rendering.sh` checks all of these.
 
 ## Cell size

@@ -150,6 +150,10 @@ main(void)
 	assert(strstr(reply, "\033]4;1;rgb:") && strstr(reply, "\033]11;rgb:"));
 	put("\033]104;1\a\033]110\a\033]111\a\033]112\a");
 	assert(colorsets == 0 && colorresets == 4);
+	/* Resetting the whole palette redraws text that still has the old colors. */
+	memset(term.dirty, 0, term.row * sizeof(*term.dirty));
+	put("\033]104\a");
+	assert(term.dirty[0] && term.dirty[term.row - 1]);
 	allowcolorchanges = 1;
 	put("\033]4;1;#ff0000\a\033]10;#000000\a\033]11;#000000\a\033]12;red\a");
 	assert(colorsets == 4);

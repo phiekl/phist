@@ -4983,6 +4983,7 @@ strhandle(void)
 			} else if (xsetcolorname(j, p)) {
 				if (par == 104 && narg <= 1) {
 					xloadcols();
+					tfulldirt();
 					return; /* color reset without parameter */
 				}
 				erresc("erresc: invalid color j=%d, p=%s\n",
