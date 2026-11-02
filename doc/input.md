@@ -139,3 +139,10 @@ an immediate return, then verify a later key follows the paste and that a
 paste not fitting the queue sends nothing. Reply checks verify ordering with
 queued input and the keys dropped from a full queue. Both suites also support
 UndefinedBehaviorSanitizer through `CFLAGS`.
+
+## Input methods
+
+When an input method disappears, phist clears its input context and
+preedit state before registering for its return. Xlib may call the
+replacement's initialization callback during registration, so clearing
+state afterwards could discard the newly created context.

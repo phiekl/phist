@@ -192,6 +192,18 @@ XftColorAllocValue(Display *d, Visual *v, Colormap map, const XRenderColor *valu
 Bool XftDrawSetClip(XftDraw *d, Region r) { return 1; }
 static int failclip;
 Bool XftDrawSetClipRectangles(XftDraw *d, int x, int y, const XRectangle *r, int n) { return !failclip; }
+/* Xlib can call back at once, if the input method is already there again. */
+static int imback;
+Bool
+XRegisterIMInstantiateCallback(Display *d, struct _XrmHashBucketRec *r, char *n, char *c, XIDProc p, XPointer u)
+{
+	if (imback) {
+		xw.ime.xim = (XIM)&imback;
+		xw.ime.spotlist = malloc(1);
+		xw.ime.xic = (XIC)&imback;
+	}
+	return 1;
+}
 
 void
 XftDrawRect(XftDraw *d, const XftColor *color, int x, int y, uint w, uint h)
@@ -3815,6 +3827,30 @@ testvimheldbuttons(int fd)
 	expect(fd, NULL);
 }
 
+/* Nothing keeps using what went with a lost input method. */
+static void
+testinputmethodlost(void)
+{
+	xw.ime.spotlist = malloc(1);
+	xw.ime.xic = (XIC)xw.ime.spotlist;
+	ximdestroy(NULL, NULL, NULL);
+	assert(!xw.ime.spotlist && !xw.ime.xic && !xw.ime.xim);
+	xximspot(0, 0);
+
+	/* What the same input method coming straight back set up stays. */
+	xw.ime.spotlist = malloc(1);
+	xw.ime.xic = (XIC)xw.ime.spotlist;
+	imback = 1;
+	ximdestroy(NULL, NULL, NULL);
+	imback = 0;
+	assert(xw.ime.spotlist && xw.ime.xic == (XIC)&imback && xw.ime.xim == (XIM)&imback);
+	free(xw.ime.spotlist);
+	xw.ime.spotlist = NULL;
+	xw.ime.xic = NULL;
+	xw.ime.xim = NULL;
+	puts("PASS: a lost input method leaves nothing to use, or what replaced it");
+}
+
 int
 main(void)
 {
@@ -3844,6 +3880,7 @@ main(void)
 	testtransfers(sockets[1]);
 	testrequests(sockets[1]);
 	testendlessdrain();
+	testinputmethodlost();
 	testclipfailure();
 	testdialog(sockets[1]);
 	testpresentationfallback(sockets[1]);

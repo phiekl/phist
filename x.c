@@ -2361,9 +2361,13 @@ void
 ximdestroy(XIM xim, XPointer client, XPointer call)
 {
 	xw.ime.xim = NULL;
+	XFree(xw.ime.spotlist);
+	xw.ime.spotlist = NULL;
+	/* The input context went with its input method. */
+	xw.ime.xic = NULL;
+	/* Last, as this can set up the replacement before it returns. */
 	XRegisterIMInstantiateCallback(xw.dpy, NULL, NULL, NULL,
 	                               ximinstantiate, NULL);
-	XFree(xw.ime.spotlist);
 }
 
 int
