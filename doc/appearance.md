@@ -312,3 +312,7 @@ graphics context. Failure to create any of them is reported before
 drawing starts. The underline graphics context is optional and created
 lazily; failure omits the underline while preserving the text and
 releasing temporary colors.
+
+If a glyph run's clip cannot be allocated, its glyphs are skipped to
+keep them from painting outside their cells. Backgrounds, underlines,
+strikethroughs and resource cleanup still run.

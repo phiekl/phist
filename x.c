@@ -3001,10 +3001,11 @@ xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, i
 	r.y = 0;
 	r.height = win.ch;
 	r.width = width;
-	XftDrawSetClipRectangles(xw.draw, winx, winy, &r, 1);
-
-	/* Render the glyphs. */
-	XftDrawGlyphFontSpec(xw.draw, fg, specs, len);
+	/* Glyphs that can't be clipped could paint over other cells. */
+	if (XftDrawSetClipRectangles(xw.draw, winx, winy, &r, 1)) {
+		/* Render the glyphs. */
+		XftDrawGlyphFontSpec(xw.draw, fg, specs, len);
+	}
 
 	/* URLs get a normal underline unless the application supplied its own. */
 	if ((base.mode & ATTR_URL) && !(base.mode & ATTR_UNDERLINE)) {
