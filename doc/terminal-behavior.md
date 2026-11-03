@@ -82,19 +82,21 @@ stderr; the terminal and its shell carry on. phist ignores `SIGPIPE`, also
 without `-o` for the sake of stderr, but programs in the terminal still get
 the default.
 
-A regular file takes output directly. Other output, including a terminal or
-socket, goes through a queue in the main loop to a small writer process over
-a nonblocking pipe. Only that process waits for the reader, so neither a
-stalled reader nor another writer filling the same pipe stops the terminal.
-`O_NONBLOCK` on the output itself would be shared with the launching shell
-for `-o -`.
+Output is queued and flushed after each read from the shell. Regular files
+are written directly. Other destinations, including terminals and sockets,
+use a writer process reached through a nonblocking pipe. Only that process
+waits for the reader, keeping the terminal responsive. Setting `O_NONBLOCK`
+on the destination itself would also change the launching shell's stdout
+flags with `-o -`.
 
-If 1 MiB is waiting in the queue, printing ends with a message on stderr, so
-the record stops rather than having gaps; a single dump larger than 1 MiB
-ends it straight away. Flushing after the shell exits gets up to a second,
-as above; output still in the queue after that is lost, as is any when
-phist's window is closed. What the writer already has still reaches the
-reader, so the writer stays until the reader takes it or goes away.
+A regular file takes whatever does not fit in the 1 MiB queue directly. For
+other destinations, printing ends with a message on stderr if 1 MiB is
+waiting in the queue, so the record stops rather than having gaps; a single
+dump larger than 1 MiB ends it straight away. Flushing after the shell exits
+gets up to a second, as above; output still in the queue after that is
+lost, as is any when phist's window is closed. What the writer already has
+still reaches the reader, so the writer stays until the reader takes it or
+goes away.
 
 A FIFO without a reader doesn't hold up startup either. The writer waits for a
 reader, while output collects in the queue, and gives up when phist exits. A

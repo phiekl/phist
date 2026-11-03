@@ -2439,8 +2439,11 @@ xwrite(int fd, const char *s, size_t len)
 
 	while (len > 0) {
 		r = write(fd, s, len);
-		if (r < 0)
+		if (r < 0) {
+			if (errno == EINTR)
+				continue;
 			return r;
+		}
 		len -= r;
 		s += r;
 	}
@@ -5256,15 +5259,12 @@ strreset(void)
 	};
 }
 
-/*
- * Printing runs inside the parser. A file takes the output directly, but a
- * pipe's reader may take any length of time to read it, which must not stop
- * the terminal. Other output waits here for the main loop, and past PRINT_MAX
- * printing ends, for a record that stops rather than one with gaps. Output
- * still waiting when phist exits is lost. The main loop passes it to a writer
- * process over a nonblocking pipe, since poll() can't promise room in a pipe
- * with other writers, and O_NONBLOCK on the output would also apply to
- * whoever shares stdout for -o -.
+/* Batch parser output and flush after each tty read. Regular files are
+ * written directly; other destinations use a writer process through a
+ * nonblocking pipe. poll() cannot guarantee room when other writers share the
+ * destination, and setting O_NONBLOCK there would affect shared stdout flags
+ * with -o -. Stop non-file printing if PRINT_MAX is exceeded, keeping the
+ * record contiguous.
  */
 static struct {
 	char *buf;
@@ -5456,14 +5456,23 @@ tprinter(char *s, size_t len)
 {
 	if (iofd == -1)
 		return;
-	if (printdirect()) {
-		if (xwrite(iofd, s, len) < 0) {
-			perror("Error writing to output file");
-			printstop();
-		}
-		return;
+	if (len > PRINT_MAX - printq.len) {
+		ttyflushprint();
+		if (iofd == -1)
+			return;
 	}
 	if (len > PRINT_MAX - printq.len) {
+		/* A file takes this directly, after what an interrupted flush left. */
+		if (printdirect()) {
+			if (xwrite(iofd, printq.buf + printq.off, printq.len) < 0 ||
+			    xwrite(iofd, s, len) < 0) {
+				perror("Error writing to output file");
+				printstop();
+				return;
+			}
+			printq.off = printq.len = 0;
+			return;
+		}
 		fprintf(stderr, "Output file not reading: stopped printing "
 		        "after %d bytes waited\n", PRINT_MAX);
 		printstop();

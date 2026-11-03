@@ -1,7 +1,23 @@
 #include "terminal.h"
 #include <sys/resource.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/un.h>
+
+/* Interrupts the next write when set, as a signal might on some filesystems. */
+long syscall(long, ...);
+static int interruptwrite;
+
+ssize_t
+write(int fd, const void *s, size_t n)
+{
+	if (interruptwrite) {
+		interruptwrite = 0;
+		errno = EINTR;
+		return -1;
+	}
+	return syscall(SYS_write, fd, s, n);
+}
 
 static void
 dump_is(const char *expected, const char *request)
@@ -16,11 +32,57 @@ dump_is(const char *expected, const char *request)
 		put(request);
 	else
 		tdump();
+	ttyflushprint();
 	rewind(file);
 	len = fread(text, 1, sizeof(text) - 1, file);
 	assert(len == strlen(expected) && !memcmp(text, expected, len));
 	fclose(file);
 	iofd = -1;
+}
+
+/* A file gets output in one write per flush, however much it is. */
+static void
+testfilebatches(void)
+{
+	static char block[PRINT_MAX + 1];
+	FILE *file = tmpfile();
+	struct stat st;
+	int i, saved = iofd;
+
+	assert(file);
+	iofd = fileno(file);
+	tprinter("x", 1);
+	assert(!fstat(iofd, &st) && st.st_size == 0);
+	ttyflushprint();
+	assert(!fstat(iofd, &st) && st.st_size == 1);
+	assert(ttyprintfd() == -1);
+
+	/* A full queue goes out, rather than ending printing as for a pipe. */
+	for (i = 0; i < 3; i++)
+		tprinter(block, PRINT_MAX / 2 + 1);
+	ttyflushprint();
+	assert(iofd != -1 && !fstat(iofd, &st));
+	assert(st.st_size == 1 + 3 * (PRINT_MAX / 2 + 1));
+	tprinter(block, sizeof(block));
+	ttyflushprint();
+	assert(iofd != -1 && !fstat(iofd, &st));
+	assert(st.st_size == 1 + 3 * (PRINT_MAX / 2 + 1) + (off_t)sizeof(block));
+	fclose(file);
+
+	/* What an interrupted flush left stays ahead of a dump too large to queue. */
+	file = tmpfile();
+	assert(file);
+	iofd = fileno(file);
+	memset(block, 'b', sizeof(block));
+	tprinter("a", 1);
+	interruptwrite = 1;
+	tprinter(block, sizeof(block));
+	assert(iofd != -1 && !fstat(iofd, &st) && st.st_size == 1 + (off_t)sizeof(block));
+	assert(ttyprintfd() == -1);
+	rewind(file);
+	assert(getc(file) == 'a' && getc(file) == 'b');
+	fclose(file);
+	iofd = saved;
 }
 
 /* A -o pipe losing its reader ends the printing only, and the child still
@@ -414,6 +476,7 @@ main(void)
 	dump_is("dhidden\n", "\033[1i");
 	dump_is("x\033[4i", "\033[5ix\033[4i");
 	mcallowed = 0;
+	testfilebatches();
 	testsigpipeignored();
 	testclosedpipe();
 	testslowreader();
