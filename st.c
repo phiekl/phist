@@ -3119,6 +3119,7 @@ execsh(char *cmd, char **args)
 	signal(SIGTERM, SIG_DFL);
 	signal(SIGALRM, SIG_DFL);
 	signal(SIGPIPE, SIG_DFL);
+	signal(SIGXFSZ, SIG_DFL);
 
 	execvp(prog, args);
 	_exit(1);
@@ -3205,6 +3206,7 @@ stty(char **args)
 		break;
 	case 0:
 		signal(SIGPIPE, SIG_DFL);
+		signal(SIGXFSZ, SIG_DFL);
 		execvp(argv[0], argv);
 		perror("Couldn't call stty");
 		_exit(127);
@@ -3239,6 +3241,8 @@ ttynew(const char *line, char *cmd, const char *out, char **args, const char *di
 	if (out) {
 		term.mode |= MODE_PRINT;
 		mcallowed = 1;
+		/* A file size limit stops the printing, not the terminal. */
+		signal(SIGXFSZ, SIG_IGN);
 		printopen(out);
 	}
 

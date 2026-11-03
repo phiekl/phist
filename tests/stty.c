@@ -39,6 +39,15 @@ main(void)
 	run("printf %s\\n", NULL, out, sizeof(out));
 	assert(!strcmp(out, "\n"));
 
+	/* What -o ignores for phist, stty gets back. */
+	signal(SIGPIPE, SIG_IGN);
+	signal(SIGXFSZ, SIG_IGN);
+	run("grep SigIgn /proc/self/status", NULL, out, sizeof(out));
+	assert(!strncmp(out, "SigIgn:", 7));
+	assert(!(strtoul(out + 7, NULL, 16) & (1UL << (SIGPIPE - 1) | 1UL << (SIGXFSZ - 1))));
+	signal(SIGPIPE, SIG_DFL);
+	signal(SIGXFSZ, SIG_DFL);
+
 	for (i = 0; i < LEN(lengths); i++) {
 		memset(big, 'x', sizeof(big));
 		big[lengths[i]] = '\0';

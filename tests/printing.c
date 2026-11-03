@@ -85,6 +85,54 @@ testfilebatches(void)
 	iofd = saved;
 }
 
+/* A file reaching its size limit ends the printing only, and the shell still dies
+ * of SIGXFSZ like any other program. */
+static void
+testfilelimit(void)
+{
+	static char block[8192];
+	char dir[32], path[64], text[512], *hit;
+	char *args[] = { "/bin/sh", "-c", "grep SigIgn /proc/self/status; sleep 5", NULL };
+	struct rlimit limit;
+	struct stat st;
+	int fd, status;
+	size_t len = 0;
+	ssize_t n;
+	pid_t child;
+
+	text[0] = '\0';
+	snprintf(dir, sizeof(dir), "/tmp/phist-limit%d", (int)getpid());
+	assert(mkdir(dir, 0700) == 0);
+	snprintf(path, sizeof(path), "%s/out", dir);
+	child = fork();
+	assert(child >= 0);
+	if (!child) {
+		alarm(20);
+		termname = "dumb";
+		assert(!getrlimit(RLIMIT_FSIZE, &limit));
+		limit.rlim_cur = sizeof(block) / 2;
+		assert(!setrlimit(RLIMIT_FSIZE, &limit));
+		fd = ttynew(NULL, "/bin/sh", path, args, NULL);
+		signal(SIGCHLD, SIG_DFL);
+		tprinter(block, sizeof(block));
+		ttyflushprint();
+		assert(iofd == -1);
+		assert(!stat(path, &st) && st.st_size == sizeof(block) / 2);
+		while (len < sizeof(text) - 1 && !strstr(text, "\n") &&
+		       (n = read(fd, text + len, sizeof(text) - 1 - len)) > 0) {
+			len += n;
+			text[len] = '\0';
+		}
+		hit = strstr(text, "SigIgn:");
+		assert(hit && !(strtoul(hit + 7, NULL, 16) & (1UL << (SIGXFSZ - 1))));
+		_exit(7);
+	}
+	assert(waitpid(child, &status, 0) == child);
+	assert(WIFEXITED(status) && WEXITSTATUS(status) == 7);
+	unlink(path);
+	rmdir(dir);
+}
+
 /* A -o pipe losing its reader ends the printing only, and the child still
  * dies of SIGPIPE like any other program: "yes" would complain otherwise. */
 static void
@@ -477,6 +525,7 @@ main(void)
 	dump_is("x\033[4i", "\033[5ix\033[4i");
 	mcallowed = 0;
 	testfilebatches();
+	testfilelimit();
 	testsigpipeignored();
 	testclosedpipe();
 	testslowreader();

@@ -77,10 +77,10 @@ The launching terminal receives neither raw output nor a screen dump. With
 `phist -o FILE`, Media Copy still writes to `FILE`. See `phist(1)` and run
 `LC_ALL=C.UTF-8 sh tests/printing.sh` for printing regressions.
 
-If `FILE` is a pipe whose reader goes away, printing stops with an error on
-stderr; the terminal and its shell carry on. phist ignores `SIGPIPE`, also
-without `-o` for the sake of stderr, but programs in the terminal still get
-the default.
+If `FILE` is a pipe whose reader goes away, or a file reaching `ulimit -f`,
+printing stops with an error on stderr; the terminal and its shell carry on.
+phist ignores `SIGPIPE`, also without `-o` for the sake of stderr, and `-o`
+makes it ignore `SIGXFSZ`, but programs in the terminal still get the default.
 
 Output is queued and flushed after each read from the shell. Regular files
 are written directly. Other destinations, including terminals and sockets,
