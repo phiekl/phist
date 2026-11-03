@@ -192,6 +192,13 @@ XftColorAllocValue(Display *d, Visual *v, Colormap map, const XRenderColor *valu
 Bool XftDrawSetClip(XftDraw *d, Region r) { return 1; }
 static int failclip;
 Bool XftDrawSetClipRectangles(XftDraw *d, int x, int y, const XRectangle *r, int n) { return !failclip; }
+static int icfocused;
+XIM XOpenIM(Display *d, struct _XrmHashBucketRec *r, char *n, char *c) { return (XIM)&icfocused; }
+char *XSetIMValues(XIM im, ...) { return NULL; }
+XVaNestedList XVaCreateNestedList(int unused, ...) { return malloc(1); }
+XIC XCreateIC(XIM im, ...) { return (XIC)&icfocused; }
+void XSetICFocus(XIC ic) { icfocused++; }
+
 /* Xlib can call back at once, if the input method is already there again. */
 static int imback;
 Bool
@@ -3844,6 +3851,20 @@ testinputmethodlost(void)
 	ximdestroy(NULL, NULL, NULL);
 	imback = 0;
 	assert(xw.ime.spotlist && xw.ime.xic == (XIC)&imback && xw.ime.xim == (XIM)&imback);
+	free(xw.ime.spotlist);
+	xw.ime.spotlist = NULL;
+	xw.ime.xic = NULL;
+	xw.ime.xim = NULL;
+
+	/* Only a window with the focus has it passed on right away. */
+	icfocused = 0;
+	win.mode &= ~MODE_FOCUSED;
+	assert(ximopen(xw.dpy) && xw.ime.xic && !icfocused);
+	free(xw.ime.spotlist);
+	xw.ime.xic = NULL;
+	win.mode |= MODE_FOCUSED;
+	assert(ximopen(xw.dpy) && xw.ime.xic && icfocused == 1);
+	win.mode &= ~MODE_FOCUSED;
 	free(xw.ime.spotlist);
 	xw.ime.spotlist = NULL;
 	xw.ime.xic = NULL;

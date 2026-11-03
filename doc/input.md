@@ -146,3 +146,8 @@ When an input method disappears, phist clears its input context and
 preedit state before registering for its return. Xlib may call the
 replacement's initialization callback during registration, so clearing
 state afterwards could discard the newly created context.
+
+A replacement input context receives focus immediately if the window is
+already focused. An input-method restart does not produce a new
+`FocusIn` event, so waiting for one would leave the context unfocused
+until the user switched windows.

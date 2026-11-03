@@ -2345,6 +2345,8 @@ ximopen(Display *dpy)
 	}
 	if (xw.ime.xic == NULL)
 		fprintf(stderr, "XCreateIC: Could not create input context.\n");
+	else if (IS_SET(MODE_FOCUSED)) /* A restart in a focused window produces no new FocusIn event. */
+		XSetICFocus(xw.ime.xic);
 
 	return 1;
 }
