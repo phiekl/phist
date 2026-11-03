@@ -113,6 +113,8 @@ int ttywritepending(void);
 void ttyflushwrites(void);
 int ttyprintfd(void);
 void ttyflushprint(void);
+int ttywakefd(void);
+void ttycheckshell(void);
 void ttyresize(int, int);
 void ttywrite(const char *, size_t, int);
 int ttyinputfits(size_t);

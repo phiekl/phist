@@ -4214,13 +4214,14 @@ xdispatch(XEvent *e)
  * ready, for its read or write to report. Return -1 if a signal interrupted.
  */
 static int
-xwait(int xfd, int ttyfd, int wantwrite, int printfd, double timeout, int *readable,
-      int *writable)
+xwait(int xfd, int ttyfd, int wantwrite, int printfd, int wakefd, double timeout,
+      int *readable, int *writable)
 {
 	struct pollfd fds[] = {
 		{ .fd = ttyfd, .events = POLLIN | (wantwrite ? POLLOUT : 0) },
 		{ .fd = xfd, .events = POLLIN },
 		{ .fd = printfd, .events = POLLOUT }, /* poll ignores -1 */
+		{ .fd = wakefd, .events = POLLIN },
 	};
 	int ms = timeout < 0 ? -1 : timeout >= INT_MAX ? INT_MAX : ceil(timeout);
 
@@ -4267,6 +4268,7 @@ run(void)
 
 	clock_gettime(CLOCK_MONOTONIC, &lastblink);
 	for (timeout = -1, drawing = 0;;) {
+		ttycheckshell();
 		clock_gettime(CLOCK_MONOTONIC, &now);
 		pasteremain = pasteremaining(now);
 		if (pasteremain >= 0 && (timeout < 0 || pasteremain < timeout))
@@ -4278,8 +4280,8 @@ run(void)
 			timeout = 0;  /* existing events might not set xfd */
 
 		/* Deliver queued input and query replies as the child reads. */
-		if (xwait(xfd, ttyfd, ttywritepending(), ttyprintfd(), timeout,
-		          &readable, &writable) < 0)
+		if (xwait(xfd, ttyfd, ttywritepending(), ttyprintfd(), ttywakefd(),
+		          timeout, &readable, &writable) < 0)
 			continue;
 		ttyflushprint();
 		clock_gettime(CLOCK_MONOTONIC, &now);

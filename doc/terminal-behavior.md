@@ -44,10 +44,15 @@ change its focus state.
 
 ## Exit status
 
-phist exits with 0 if its shell exits with 0, and with 1 if the shell exits with
-any other status or is killed by a signal. Run `LC_ALL=C.UTF-8 sh
-tests/shellexit.sh` to check. A shell that closes the terminal and keeps running
-ends phist a second later with an error on stderr and status 1.
+phist exits with 0 if its shell exits with 0, and with 1 for any other shell
+status or signal termination. Before exiting, it drains remaining pty
+output and flushes the `-o` queue. A descendant still writing to the pty gets
+one second; flushing queued output gets another. A three-second alarm ends
+phist if the main loop is stuck, for example waiting for the X server.
+
+A shell that closes the pty but keeps running causes phist to exit after
+one second with a diagnostic and status 1. Run `LC_ALL=C.UTF-8 sh
+tests/shellexit.sh` to check these cases.
 
 The shell's exit handler is installed before forking. `SIGCHLD` remains
 blocked until the shell PID is recorded, then is unblocked even if the
@@ -86,9 +91,10 @@ for `-o -`.
 
 If 1 MiB is waiting in the queue, printing ends with a message on stderr, so
 the record stops rather than having gaps; a single dump larger than 1 MiB
-ends it straight away. Output in the queue when phist exits is lost. What the writer already has
-still reaches the reader, so the writer stays until the reader takes it or goes
-away.
+ends it straight away. Flushing after the shell exits gets up to a second,
+as above; output still in the queue after that is lost, as is any when
+phist's window is closed. What the writer already has still reaches the
+reader, so the writer stays until the reader takes it or goes away.
 
 A FIFO without a reader doesn't hold up startup either. The writer waits for a
 reader, while output collects in the queue, and gives up when phist exits. A

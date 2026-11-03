@@ -58,6 +58,7 @@
 #define ERRESC_BURST  20        /* diagnostics printed before rate limiting */
 #define ERRESC_RATE   5         /* diagnostics per second after a burst */
 #define PRINT_MAX     (1 << 20) /* bytes of -o output waiting for a reader */
+#define SHELL_FINISH_MAX 3      /* seconds phist stays after its shell exits */
 #define REPLY_MAX     4096      /* bytes of query replies waiting for the child */
 #define INPUT_MAX     (64 * 1024 * 1024) /* queued-input limit; an empty queue accepts one larger input */
 #define DUMP_MAX      128       /* bytes of a sequence shown in a diagnostic */
@@ -3120,6 +3121,9 @@ execsh(char *cmd, char **args)
 	_exit(1);
 }
 
+static volatile sig_atomic_t shelldone, shellstatus;
+static int shellwake[2] = { -1, -1 };
+
 static void
 exitlikeshell(int stat)
 {
@@ -3128,12 +3132,27 @@ exitlikeshell(int stat)
 	_exit(0);
 }
 
+static void
+shellexitnow(int a)
+{
+	exitlikeshell(shellstatus);
+}
+
+/*
+ * The main loop finishes up, as the shell's last output is still in the pty and
+ * this can't run the parser. The pipe wakes it if it was just about to wait. It
+ * may be stuck instead, as in Xlib with the X server stopped, which must not
+ * keep phist around, so the alarm ends things after the time finishing can take.
+ */
 void
 sigchld(int a)
 {
+	struct sigaction sa = { .sa_handler = shellexitnow };
 	int stat, olderrno;
 	pid_t p;
 
+	if (shelldone)
+		return;
 	olderrno = errno;
 	do {
 		p = waitpid(pid, &stat, WNOHANG);
@@ -3142,12 +3161,16 @@ sigchld(int a)
 	if (p < 0)
 		_exit(1);
 
-	if (pid != p) {
-		errno = olderrno;
-		return;
+	if (pid == p) {
+		shellstatus = stat;
+		shelldone = 1;
+		if (write(shellwake[1], "", 1) < 0)
+			; /* one byte in an empty pipe, and the flag is set anyway */
+		sigemptyset(&sa.sa_mask);
+		sigaction(SIGALRM, &sa, NULL);
+		alarm(SHELL_FINISH_MAX);
 	}
-
-	exitlikeshell(stat);
+	errno = olderrno;
 }
 
 /* Run stty_args, split at blanks, and args without a shell to reparse them. */
@@ -3236,6 +3259,11 @@ ttynew(const char *line, char *cmd, const char *out, char **args, const char *di
 	 * missed, and block SIGCHLD until fork() has returned, so the handler
 	 * knows which child is the shell.
 	 */
+	if (pipe(shellwake) < 0)
+		die("pipe failed: %s\n", strerror(errno));
+	fcntl(shellwake[0], F_SETFD, FD_CLOEXEC);
+	fcntl(shellwake[1], F_SETFD, FD_CLOEXEC);
+	fcntl(shellwake[1], F_SETFL, O_NONBLOCK);
 	sigemptyset(&chld);
 	sigaddset(&chld, SIGCHLD);
 	sigprocmask(SIG_BLOCK, &chld, &mask);
@@ -3276,53 +3304,118 @@ ttynew(const char *line, char *cmd, const char *out, char **args, const char *di
 #endif
 		close(s);
 		cmdfd = m;
+		/* Here and not in sigchld(), whose mask ends with it: SIGALRM has to
+		 * get through for a stuck main loop not to keep phist around. */
+		sigaddset(&chld, SIGALRM);
 		sigprocmask(SIG_UNBLOCK, &chld, NULL);
 		break;
 	}
 	return cmdfd;
 }
 
+static char ttyin[BUFSIZ];
+static int ttyinlen;
+
+/* Read once and parse what it gave, keeping an incomplete UTF-8 sequence. */
+static ssize_t
+ttyreadsome(void)
+{
+	ssize_t ret;
+	int written;
+
+	/* append read bytes to unprocessed bytes */
+	ret = read(cmdfd, ttyin + ttyinlen, LEN(ttyin) - ttyinlen);
+	if (ret <= 0)
+		return ret;
+	ttyinlen += ret;
+	written = twrite(ttyin, ttyinlen, 0);
+	ttyinlen -= written;
+	ttyflushprint();
+	/* keep any incomplete UTF-8 byte sequence for the next call */
+	if (ttyinlen > 0)
+		memmove(ttyin, ttyin + written, ttyinlen);
+	return ret;
+}
+
 /*
- * The shell's end of the pty closes just before the shell counts as exited,
- * so EIO usually comes first: wait up to a second for it to exit. With
- * SIGCHLD blocked, the handler can't reap the shell in between and leave
- * waitpid() nothing to find. A shell still running has only closed the
- * terminal, and the read error is reported.
+ * The milliseconds left of a second since start, as a job that outlives the
+ * shell can keep writing to the pty, and a stalled reader can keep the queue
+ * waiting.
+ */
+static int
+ttyfinishleft(const struct timespec *start)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return MAX(0, 1000 - (int)MIN(TIMEDIFF(now, (*start)), 1000));
+}
+
+/* The shell is gone: take in its last output, and pass it on, before exiting. */
+static void
+ttyfinish(void)
+{
+	struct pollfd fd = { .fd = cmdfd, .events = POLLIN };
+	struct timespec start;
+
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	while (ttyfinishleft(&start) && poll(&fd, 1, 0) > 0 &&
+	       (fd.revents & POLLIN) && ttyreadsome() > 0)
+		;
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	fd.events = POLLOUT;
+	for (;;) {
+		ttyflushprint();
+		fd.fd = ttyprintfd();
+		if (fd.fd < 0 || !ttyfinishleft(&start))
+			break;
+		poll(&fd, 1, ttyfinishleft(&start));
+	}
+	exitlikeshell(shellstatus);
+}
+
+int
+ttywakefd(void)
+{
+	return shellwake[0];
+}
+
+/* Finish, without returning, if sigchld() has seen the shell exit. */
+void
+ttycheckshell(void)
+{
+	if (shelldone)
+		ttyfinish();
+}
+
+/*
+ * The shell's end of the pty closes just before it counts as exited, so EIO
+ * usually comes first. Give sigchld() a second to see the exit. A shell still
+ * running has only closed the terminal, and the read error is reported.
  */
 static void
 ttywaitshell(void)
 {
-	struct timespec tick = { .tv_nsec = 10000000 };
-	sigset_t chld;
-	pid_t p;
-	int i, stat;
+	struct pollfd fd = { .fd = shellwake[0], .events = POLLIN };
+	struct timespec start;
 
-	sigemptyset(&chld);
-	sigaddset(&chld, SIGCHLD);
-	sigprocmask(SIG_BLOCK, &chld, NULL);
-	for (i = 0; i < 100; i++) {
-		p = waitpid(pid, &stat, WNOHANG);
-		if (p == pid)
-			exitlikeshell(stat);
-		if (p < 0 && errno != EINTR)
-			break;
-		nanosleep(&tick, NULL);
-	}
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	while (!shelldone && ttyfinishleft(&start) &&
+	       (poll(&fd, 1, ttyfinishleft(&start)) == 0 || errno == EINTR) && !fd.revents)
+		;
+	ttycheckshell();
 	errno = EIO;
 }
 
 size_t
 ttyread(void)
 {
-	static char buf[BUFSIZ];
-	static int buflen = 0;
-	int ret, written;
+	ssize_t ret;
 
 	/* Only an incomplete UTF-8 sequence is kept, so there is always room. */
-	if (buflen >= LEN(buf))
+	if (ttyinlen >= LEN(ttyin))
 		return 0;
-	/* append read bytes to unprocessed bytes */
-	ret = read(cmdfd, buf+buflen, LEN(buf)-buflen);
+	ret = ttyreadsome();
 
 	switch (ret) {
 	case 0:
@@ -3332,13 +3425,6 @@ ttyread(void)
 			ttywaitshell();
 		die("couldn't read from shell: %s\n", strerror(errno));
 	default:
-		buflen += ret;
-		written = twrite(buf, buflen, 0);
-		buflen -= written;
-		ttyflushprint();
-		/* keep any incomplete UTF-8 byte sequence for the next call */
-		if (buflen > 0)
-			memmove(buf, buf + written, buflen);
 		return ret;
 	}
 }
@@ -3486,6 +3572,10 @@ ttywritesome(const char *s, size_t n)
 		die("couldn't restore tty flags: %s\n", strerror(errno));
 	if (r < 0) {
 		if (saved == EAGAIN || saved == EWOULDBLOCK || saved == EINTR)
+			return 0;
+		/* Should the shell's end closing make this fail, which Linux doesn't
+		 * do today, reading the pty finds that out after what is left there. */
+		if (saved == EIO && pid > 0)
 			return 0;
 		die("write error on tty: %s\n", strerror(saved));
 	}

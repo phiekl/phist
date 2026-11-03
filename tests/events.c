@@ -47,22 +47,22 @@ testwait(void)
 	assert(socketpair(AF_UNIX, SOCK_STREAM, 0, xfds) == 0);
 
 	/* Nothing to report: only the timeout ends the wait. */
-	assert(!xwait(xfds[0], fds[0], 0, -1, 1, &readable, &writable));
+	assert(!xwait(xfds[0], fds[0], 0, -1, -1, 1, &readable, &writable));
 	assert(!readable && !writable);
 
 	/* Output for phist, and room for input only when it has some. */
 	assert(write(fds[1], "x", 1) == 1);
-	assert(!xwait(xfds[0], fds[0], 0, -1, 1000, &readable, &writable));
+	assert(!xwait(xfds[0], fds[0], 0, -1, -1, 1000, &readable, &writable));
 	assert(readable && !writable);
-	assert(!xwait(xfds[0], fds[0], 1, -1, 1000, &readable, &writable));
+	assert(!xwait(xfds[0], fds[0], 1, -1, -1, 1000, &readable, &writable));
 	assert(readable && writable);
 	assert(read(fds[0], &c, 1) == 1);
-	assert(!xwait(xfds[0], fds[0], 1, -1, 1000, &readable, &writable));
+	assert(!xwait(xfds[0], fds[0], 1, -1, -1, 1000, &readable, &writable));
 	assert(!readable && writable);
 
 	/* The X connection ends the wait, and is not mistaken for the tty. */
 	assert(write(xfds[1], "x", 1) == 1);
-	assert(!xwait(xfds[0], fds[0], 0, -1, -1, &readable, &writable));
+	assert(!xwait(xfds[0], fds[0], 0, -1, -1, -1, &readable, &writable));
 	assert(!readable && !writable);
 	assert(read(xfds[0], &c, 1) == 1);
 
@@ -74,24 +74,36 @@ testwait(void)
 		ssize_t n;
 
 		assert(pipe(out) == 0);
-		assert(!xwait(xfds[0], fds[0], 0, out[1], 1000, &readable, &writable));
+		assert(!xwait(xfds[0], fds[0], 0, out[1], -1, 1000, &readable, &writable));
 		assert(!readable && !writable);
 		assert(fcntl(out[1], F_SETFL, O_NONBLOCK) == 0);
 		while ((n = write(out[1], full, sizeof(full))) > 0)
 			;
 		assert(fcntl(out[1], F_SETFL, 0) == 0);
-		assert(!xwait(xfds[0], fds[0], 0, out[1], 1, &readable, &writable));
+		assert(!xwait(xfds[0], fds[0], 0, out[1], -1, 1, &readable, &writable));
 		assert(!readable && !writable);
 		close(out[0]);
 		close(out[1]);
 	}
 
+	/* The shell exiting wakes the wait, without anything else being ready. */
+	{
+		int wake[2];
+
+		assert(pipe(wake) == 0);
+		assert(write(wake[1], "", 1) == 1);
+		assert(!xwait(xfds[0], fds[0], 0, -1, wake[0], -1, &readable, &writable));
+		assert(!readable && !writable);
+		close(wake[0]);
+		close(wake[1]);
+	}
+
 	/* A timeout under a millisecond waits rather than spins or truncates. */
-	assert(!xwait(xfds[0], fds[0], 0, -1, 0.25, &readable, &writable));
+	assert(!xwait(xfds[0], fds[0], 0, -1, -1, 0.25, &readable, &writable));
 
 	/* A long timeout is not cut short, and a hang-up counts as ready. */
 	close(fds[1]);
-	assert(!xwait(xfds[0], fds[0], 0, -1, 1e300, &readable, &writable));
+	assert(!xwait(xfds[0], fds[0], 0, -1, -1, 1e300, &readable, &writable));
 	assert(readable && !writable);
 
 	puts(high ? "PASS: waiting on descriptors past FD_SETSIZE"
