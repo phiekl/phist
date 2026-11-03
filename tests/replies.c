@@ -81,6 +81,54 @@ expectfcntlfailure(int cmd, int wantsets)
 	close(fds[1]);
 }
 
+/* Read exactly the reply wanted, however it is split, and compare it. */
+static void
+expectreply(int fd, const char *want)
+{
+	char got[64];
+	size_t len = strlen(want), n = 0;
+	ssize_t r;
+
+	assert(len <= sizeof(got));
+	alarm(10); /* fail instead of hanging on a missing reply */
+	while (n < len) {
+		r = read(fd, got + n, len - n);
+		assert(r > 0);
+		n += r;
+	}
+	alarm(0);
+	assert(!memcmp(got, want, len));
+}
+
+/* Whether a query is logged as an unknown CSI and gets no reply. */
+static void
+expectnoreply(int fd, const char *query, const char *log)
+{
+	char out[256], c;
+	FILE *f = tmpfile();
+	int saved = dup(2);
+	size_t n;
+
+	assert(f && saved >= 0);
+	fflush(stderr);
+	dup2(fileno(f), 2);
+	put(query);
+	fflush(stderr);
+	dup2(saved, 2);
+	close(saved);
+	rewind(f);
+	n = fread(out, 1, sizeof(out) - 1, f);
+	out[n] = '\0';
+	fclose(f);
+	assert(!strcmp(out, log));
+
+	ttyflushwrites();
+	assert(!ttywritepending());
+	assert(fcntl(fd, F_SETFL, O_NONBLOCK) == 0);
+	assert(read(fd, &c, 1) < 0 && errno == EAGAIN);
+	assert(fcntl(fd, F_SETFL, 0) == 0);
+}
+
 int
 main(void)
 {
@@ -98,6 +146,9 @@ main(void)
 	put("\033[6n");
 	assert(read(fds[1], reply, sizeof(reply)) > 0);
 	assert(sb.view_offset == 1 && sel.ob.x == 0);
+	put("\033[18t");
+	expectreply(fds[1], "\033[8;4;20t");
+	assert(sb.view_offset == 1 && sel.ob.x == 0);
 	ttywrite("\033[I", 3, 0);
 	assert(read(fds[1], reply, sizeof(reply)) == 3);
 	assert(sb.view_offset == 1 && sel.ob.x == 0);
@@ -107,6 +158,33 @@ main(void)
 	assert(read(fds[1], reply, sizeof(reply)) == 1 && reply[0] == 'x');
 	assert(sb.view_offset == 0 && sel.ob.x == 0 && sel.ob.y == -1);
 	puts("PASS: automatic replies preserve history/selection; user input returns live, keeping the selection");
+
+	/* Window-size replies follow resizes, including on the alternate screen. */
+	tresize(137, 42);
+	put("\033[18t");
+	expectreply(fds[1], "\033[8;42;137t");
+	put("\033[?1049h");
+	tresize(1, 1);
+	put("\033[18t");
+	expectreply(fds[1], "\033[8;1;1t");
+	put("\033[?1049l\033[18t");
+	expectreply(fds[1], "\033[8;1;1t");
+	reset(20, 4);
+	puts("PASS: window-size queries report current rows and columns on both screens");
+
+	/* Other XTWINOPS requests and CSI 18 t variants get no reply. */
+	expectnoreply(fds[1], "\033[?18t", "erresc: unknown csi ESC[?18t\n");
+	expectnoreply(fds[1], "\033[14t", "erresc: unknown csi ESC[14t\n");
+	expectnoreply(fds[1], "\033[19t", "erresc: unknown csi ESC[19t\n");
+	expectnoreply(fds[1], "\033[22;0t", "erresc: unknown csi ESC[22;0t\n");
+	expectnoreply(fds[1], "\033[23;0t", "erresc: unknown csi ESC[23;0t\n");
+	expectnoreply(fds[1], "\033[t", "erresc: unknown csi ESC[t\n");
+	expectnoreply(fds[1], "\033[18;1;2t", "erresc: unknown csi ESC[18;1;2t\n");
+	expectnoreply(fds[1], "\033[18;t", "erresc: unknown csi ESC[18;t\n");
+	expectnoreply(fds[1], "\033[18:5t", "erresc: unknown csi ESC[18:5t\n");
+	put("\033[18t");
+	expectreply(fds[1], "\033[8;4;20t");
+	puts("PASS: only a plain CSI 18 t is answered; other window operations are logged");
 
 	/* A short write of user input neither blocks reading nor loses bytes. */
 	alarm(10);

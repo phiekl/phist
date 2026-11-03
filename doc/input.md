@@ -20,6 +20,20 @@ Run `LC_ALL=C.UTF-8 sh tests/replies.sh` for reply and empty/nonempty-input
 regressions. History selection behavior is also covered by
 `tests/history.sh`.
 
+## Window-size query
+
+The xterm `CSI 18 t` (`ESC [ 18 t`) query reports the current text area
+size in character cells. The reply is `CSI 8 ; rows ; columns t`, for example
+`ESC [ 8 ; 24 ; 80 t` for an 80-column, 24-row terminal. It works on both
+screens, follows resizing and leaves the scrollback view and selection in
+place. It does not require `allowwindowops`.
+
+Only the plain query is answered. Other XTWINOPS requests such as `CSI 14 t`
+(pixel size), `CSI 19 t` (screen size) and `CSI 22 t`/`CSI 23 t` (title
+stack) are not supported, nor are `CSI 18 t` variants with a `?`, extra
+arguments or colon sub-parameters. They get no reply and are logged as an
+unknown CSI sequence.
+
 ## Delete key
 
 Delete and keypad Delete send the sequence advertised by the default
@@ -76,11 +90,11 @@ tests/replies.sh`.
 
 ## Queued replies
 
-Replies to DA, DECID, DSR/CPR and OSC color queries use a nonblocking queue
-of up to 4,096 bytes. While replies are pending, the main loop also waits
-for a writable tty, so a query followed by a read is answered promptly. If a
-child keeps querying without reading and a reply does not fit, that reply is
-dropped with a rate-limited diagnostic.
+Replies to DA, DECID, DSR/CPR, window-size and OSC color queries use a
+nonblocking queue of up to 4,096 bytes. While replies are pending, the main
+loop also waits for a writable tty, so a query followed by a read is answered
+promptly. If a child keeps querying without reading and a reply does not fit,
+that reply is dropped with a rate-limited diagnostic.
 
 If phist cannot read the tty flags, enable nonblocking writes or restore
 the original flags, it exits with a diagnostic rather than risk a

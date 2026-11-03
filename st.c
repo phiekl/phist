@@ -4712,6 +4712,15 @@ csihandle(void)
 	case 's': /* DECSC -- Save cursor position (ANSI.SYS) */
 		tcursor(CURSOR_SAVE);
 		break;
+	case 't': /* XTWINOPS -- Window operations */
+		/* Only a plain CSI 18 t: no '?', sub-parameters or extra arguments. */
+		if (csiescseq.priv || csiescseq.narg != 1 ||
+		    csiescseq.cargc[0] || csiescseq.arg[0] != 18)
+			goto unknown;
+		/* Report the text area size in characters. */
+		len = snprintf(buf, sizeof(buf), "\033[8;%i;%it", term.row, term.col);
+		ttyreply(buf, len);
+		break;
 	case 'u': /* DECRC -- Restore cursor position (ANSI.SYS) */
 		if (csiescseq.priv) {
 			goto unknown;
