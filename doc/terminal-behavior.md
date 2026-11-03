@@ -58,6 +58,11 @@ The shell's exit handler is installed before forking. `SIGCHLD` remains
 blocked until the shell PID is recorded, then is unblocked even if the
 launcher blocked it. The shell also starts with `SIGCHLD` unblocked.
 
+Child-exit notifications use `sigaction()` with `SA_NOCLDSTOP`,
+retaining the handler and avoiding stop notifications. With
+`_XOPEN_SOURCE` on glibc, `signal()` would reset the handler after one
+signal; a shell stop could otherwise consume it before the shell exits.
+
 ## Media Copy
 
 Application-controlled Media Copy sequences work only when phist was started

@@ -169,6 +169,12 @@ testlastoutput(void)
 	assert(run("(trap '' HUP; sleep 3) & exit 3", said, sizeof(said)) == 1 && !*said);
 	assert(elapsed(&start) < 2.5);
 
+	/* Nor does the shell having been stopped first take the signal away. */
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	assert(run("(trap '' HUP; sleep 0.3; kill -CONT $$) & (trap '' HUP; sleep 4) & "
+	           "kill -STOP $$; exit 3", said, sizeof(said)) == 1 && !*said);
+	assert(elapsed(&start) < 2.5);
+
 	/* A reader that takes nothing can't hold phist up for long either. */
 	assert(pipe(fds) == 0);
 	snprintf(path, sizeof(path), "/proc/%d/fd/%d", (int)getpid(), fds[1]);

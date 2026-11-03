@@ -3229,6 +3229,7 @@ stty(char **args)
 int
 ttynew(const char *line, char *cmd, const char *out, char **args, const char *dir)
 {
+	struct sigaction sa;
 	sigset_t chld, mask;
 	int m, s;
 
@@ -3274,7 +3275,11 @@ ttynew(const char *line, char *cmd, const char *out, char **args, const char *di
 	sigemptyset(&chld);
 	sigaddset(&chld, SIGCHLD);
 	sigprocmask(SIG_BLOCK, &chld, &mask);
-	signal(SIGCHLD, sigchld);
+	/* Keep the handler installed and ignore child stop notifications. */
+	sa.sa_handler = sigchld;
+	sa.sa_flags = SA_NOCLDSTOP | SA_RESTART;
+	sigemptyset(&sa.sa_mask);
+	sigaction(SIGCHLD, &sa, NULL);
 
 	switch (pid = fork()) {
 	case -1:
