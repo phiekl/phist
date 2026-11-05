@@ -45,7 +45,7 @@ including these movement rules and multi-click expansion.
 
 ## Keyboard selection
 
-Press Ctrl+V to select text with Vim's keys, without the mouse. A
+Press Ctrl+Alt+V to select text with Vim's keys, without the mouse. A
 cursor appears on the terminal's cursor, or on the bottom row when scrolled
 back, and the window is tinted. A bar across the bottom names the mode until
 the next key, and Ctrl+V or a change between `v`, `V` and normal brings it back.

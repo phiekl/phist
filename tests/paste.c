@@ -2043,7 +2043,7 @@ testdialog(int fd)
 	pressnow(XK_Return, 0);
 	pressnow(XK_c, ControlMask);
 	press(XK_a, 0);
-	press(XK_v, ControlMask);
+	press(XK_v, ControlMask | Mod1Mask);
 	click.xbutton.type = ButtonPress;
 	click.xbutton.button = Button1;
 	bpress(&click);
@@ -2709,7 +2709,7 @@ testmodalshortcuts(int fd)
 		if (mode == 1)
 			press(XK_slash, ControlMask);
 		else if (mode == 2)
-			press(XK_v, ControlMask);
+			press(XK_v, ControlMask | Mod1Mask);
 		for (lock = 0; lock <= 1; lock++) {
 			before = fontcalls;
 			if (!setjmp(fontjump))
@@ -3468,7 +3468,7 @@ testvimkeys(int fd)
 	resizewindow(80, 5);
 	tresize(80, 5);
 	testmouse_put("\033[H\033[2Jalpha beta\r\ngamma delta\r\nend");
-	press(XK_v, ControlMask);
+	press(XK_v, ControlMask | Mod1Mask);
 	assert(tvimactive() == VIM_NORMAL);
 
 	/* The window is tinted, and the name shows at the left of a bar along
@@ -3609,7 +3609,7 @@ testvimkeys(int fd)
 	assert(tvimactive() == VIM_NORMAL);
 	press(XK_Escape, 0);
 	assert(!tvimactive());
-	press(XK_v, ControlMask);
+	press(XK_v, ControlMask | Mod1Mask);
 
 	/* A copy goes to PRIMARY and CLIPBOARD, and ends the mode. Nothing
 	 * typed reached the child. */
@@ -3625,7 +3625,7 @@ testvimkeys(int fd)
 	expect(fd, NULL);
 
 	/* Search takes keys while it is open, the cursor moving to its result. */
-	press(XK_v, ControlMask);
+	press(XK_v, ControlMask | Mod1Mask);
 	vimtype("/");
 	assert(tsearchactive() && tvimactive());
 	presentframe();
@@ -3652,20 +3652,20 @@ testvimkeys(int fd)
 	assert(!tvimactive());
 	expect(fd, NULL);
 
-	/* Ctrl+V starts it also with Caps Lock, but
+	/* Ctrl+Alt+V starts it also with Caps Lock, but
 	 * not from the search field or as Ctrl+Shift+V. */
-	press(XK_V, ControlMask | LockMask);
+	press(XK_V, ControlMask | Mod1Mask | LockMask);
 	assert(tvimactive() == VIM_NORMAL);
 	press(XK_Escape, 0);
 	press(XK_V, ControlMask | ShiftMask);
 	assert(!tvimactive());
 	searchstart(NULL);
-	press(XK_v, ControlMask);
+	press(XK_v, ControlMask | Mod1Mask);
 	assert(tsearchactive() && !tvimactive() && !searchlen);
 	press(XK_Escape, 0);
 
-	/* A second Ctrl+V selects a block, as in Vim. */
-	press(XK_v, ControlMask);
+	/* Ctrl+V selects a block after Ctrl+Alt+V starts the mode. */
+	press(XK_v, ControlMask | Mod1Mask);
 	press(XK_v, ControlMask);
 	assert(tvimactive() == VIM_BLOCK);
 	press(XK_Escape, 0);
@@ -3674,10 +3674,10 @@ testvimkeys(int fd)
 	expect(fd, NULL);
 
 	/* Ctrl+C and q leave without reaching the child. */
-	press(XK_v, ControlMask);
+	press(XK_v, ControlMask | Mod1Mask);
 	press(XK_c, ControlMask);
 	assert(!tvimactive());
-	press(XK_v, ControlMask);
+	press(XK_v, ControlMask | Mod1Mask);
 	vimtype("q");
 	assert(!tvimactive());
 	expect(fd, NULL);
@@ -3685,7 +3685,7 @@ testvimkeys(int fd)
 	/* It closes the link box and abandons a paste, then afterwards typing
 	 * reaches the child as usual. */
 	urlboxopen(xstrdup("https://example.com"), 0, 0, 0);
-	press(XK_v, ControlMask);
+	press(XK_v, ControlMask | Mod1Mask);
 	assert(tvimactive() && !urlbox.text);
 	press(XK_Escape, 0);
 	assert(!tvimactive());
@@ -3696,7 +3696,7 @@ testvimkeys(int fd)
 	/* Without the overlay's pixmap the name is still drawn. */
 	failpixmap = 1;
 	vbellfree();
-	press(XK_v, ControlMask);
+	press(XK_v, ControlMask | Mod1Mask);
 	presentframe();
 	assert(dialogrow(" NORMAL ") == 3);
 	press(XK_Escape, 0);
@@ -3759,25 +3759,16 @@ testrestoredshortcuts(int fd)
 	shortcuts[0].keysym = saved.keysym;
 	shortcuts[0].mod = saved.mod;
 	shortcuts[0].func = saved.func;
-	/* Rebinding keyboard selection frees Ctrl+V for the child. */
-	for (i = 0; i < LEN(shortcuts); i++) {
-		uint savedmod;
-
-		if (shortcuts[i].func != vimstart)
-			continue;
-		savedmod = shortcuts[i].mod;
-		shortcuts[i].mod = ControlMask | Mod1Mask;
-		lookuptext = "\026";
-		press(XK_v, ControlMask);
-		expect(fd, "\026");
-		press(XK_V, ControlMask | LockMask);
-		expect(fd, "\026");
-		assert(!tvimactive());
-		press(XK_v, ControlMask | Mod1Mask);
-		assert(tvimactive());
-		press(XK_Escape, 0);
-		shortcuts[i].mod = savedmod;
-	}
+	/* Ctrl+V reaches the child; Ctrl+Alt+V starts keyboard selection. */
+	lookuptext = "\026";
+	press(XK_v, ControlMask);
+	expect(fd, "\026");
+	press(XK_V, ControlMask | LockMask);
+	expect(fd, "\026");
+	assert(!tvimactive());
+	press(XK_v, ControlMask | Mod1Mask);
+	assert(tvimactive());
+	press(XK_Escape, 0);
 	lookuptext = "x";
 	expect(fd, NULL);
 }
@@ -3800,7 +3791,7 @@ testvimdrag(int fd)
 		testmouse_put("\033[H\033[2J");
 		testmouse_put(text[i]);
 		mouseat(ButtonPress, Button1, 0, 0);
-		press(XK_v, ControlMask | Button1Mask);
+		press(XK_v, ControlMask | Mod1Mask | Button1Mask);
 		vimtype("H0vll");
 		before = owned;
 		primary = xsel.primary ? xstrdup(xsel.primary) : NULL;
@@ -3817,14 +3808,14 @@ testvimdrag(int fd)
 
 		/* A release over the original URL must not activate it either. */
 		mouseat(ButtonPress, Button1, 0, 0);
-		press(XK_v, ControlMask | Button1Mask);
+		press(XK_v, ControlMask | Mod1Mask | Button1Mask);
 		mouseat(ButtonRelease, Button1, 0, 0);
 		assert(owned == before && !urlbox.text && tvimactive());
 		vimtype("q");
 	}
 	/* Starting and leaving without a held button must allow the next drag. */
 	testmouse_put("\033[H\033[2Jalpha beta");
-	press(XK_v, ControlMask);
+	press(XK_v, ControlMask | Mod1Mask);
 	vimtype("q");
 	drag(0, 0, 2, 0);
 	assert(!strcmp(xsel.primary, "alp"));
@@ -3845,7 +3836,7 @@ testvimheldbuttons(int fd)
 		for (leavefirst = 0; leavefirst <= 1; leavefirst++) {
 			before = requests;
 			mouseat(ButtonPress, button, 0, 0);
-			press(XK_v, ControlMask | buttonmask(button));
+			press(XK_v, ControlMask | Mod1Mask | buttonmask(button));
 			assert(tvimactive());
 			if (leavefirst)
 				vimtype("q");

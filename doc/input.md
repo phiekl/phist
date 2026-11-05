@@ -17,9 +17,9 @@ Break and Print Screen. A key sends input when it has a terminal mapping
 or produces text; Ctrl+Shift+C, for example, can send the same control byte
 as Ctrl+C.
 
-Ctrl+V starts [keyboard selection](selection.md#keyboard-selection) by
-default. Rebinding that shortcut allows Ctrl+V to reach programs. Inside
-keyboard selection, Ctrl+V selects a block. Shift+Insert pastes from PRIMARY.
+Ctrl+Alt+V starts [keyboard selection](selection.md#keyboard-selection) by
+default. Ctrl+V reaches programs unless keyboard selection is active, where
+it selects a block. Shift+Insert pastes from PRIMARY.
 
 Run `LC_ALL=C.UTF-8 sh tests/replies.sh` for reply and empty/nonempty-input
 regressions. History selection behavior is also covered by
