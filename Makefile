@@ -2,6 +2,8 @@
 # See LICENSE file for copyright and license details.
 .POSIX:
 
+VERSION != git describe --tags --always --dirty 2>/dev/null || echo unknown
+
 include config.mk
 
 SRC = st.c x.c
@@ -16,15 +18,20 @@ config.h:
 	$(CC) $(STCFLAGS) -c $<
 
 st.o: combining.h compose.h config.h st.h win.h
-x.o: arg.h config.h paste.c st.h win.h
+x.o: arg.h config.h paste.c st.h win.h .version
 
-$(OBJ): config.h config.mk
+$(OBJ): config.h config.mk Makefile
+
+# Refresh the compiled version only when the Git description changes.
+.version: FORCE
+	@printf '%s\n' '$(VERSION)' > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
 
 phist: $(OBJ)
 	$(CC) -o $@ $(OBJ) $(STLDFLAGS)
 
 clean:
-	rm -f phist $(OBJ) phist-$(VERSION).tar.gz
+	rm -f phist $(OBJ) .version .version.tmp phist-$(VERSION).tar.gz
 	rm -rf .terminfo
 
 dist: clean
@@ -56,4 +63,6 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/phist
 	rm -f $(DESTDIR)$(MANPREFIX)/man1/phist.1
 
-.PHONY: all clean dist terminfo install uninstall
+FORCE:
+
+.PHONY: all clean dist terminfo install uninstall FORCE

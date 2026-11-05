@@ -1,6 +1,3 @@
-# phist version
-VERSION = 0.9.3
-
 # Customize below to fit your system
 
 # paths

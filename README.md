@@ -58,6 +58,9 @@ make terminfo
 TERMINFO="$PWD/.terminfo" ./phist
 ```
 
+The build version comes from `git describe --tags --always --dirty`. Without
+Git metadata it defaults to `unknown`; use `make VERSION=...` to override it.
+
 The executable is `phist` and the default `TERM` is `phist-256color`. The
 terminfo definitions in `st.info` are st's entries renamed to `phist` names,
 including the suffixed variants. Install these entries on remote hosts too

@@ -2,3 +2,5 @@
 /config.h
 /phist
 /.terminfo/
+/.version
+/.version.tmp
