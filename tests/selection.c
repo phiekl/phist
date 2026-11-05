@@ -149,6 +149,34 @@ main(void)
 	expect(6, 0, 1, "one, two; three.");
 	expect(6, 0, 2, "<one, two; three.>");
 
+	/* Assignment expansion stays with its own value, including across wraps. */
+	{
+		const char *env = "COLORTERM=1 LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM=xterm-256color";
+		const char *assignment = "LC_ALL=C.UTF-8";
+		int widths[] = { 80, 16 };
+		int start = strstr(env, "LC_ALL") - env, cols, pos;
+		size_t w;
+
+		for (w = 0; w < LEN(widths); w++) {
+			cols = widths[w];
+			reset(cols, 5);
+			put(env);
+			for (i = 0; assignment[i]; i++) {
+				pos = start + i;
+				expect(pos % cols, pos / cols, 0,
+				       i < 6 ? "LC_ALL" : i == 6 ? "=" : "C.UTF-8");
+				expect(pos % cols, pos / cols, 1, assignment);
+				expect(pos % cols, pos / cols, 2, env);
+			}
+		}
+		reset(80, 5);
+		put("A=x LONG_NAME=value EMPTY=");
+		expect(8, 0, 0, "LONG_NAME");
+		expect(8, 0, 1, "LONG_NAME=value");
+		expect(22, 0, 0, "EMPTY");
+		expect(22, 0, 1, "EMPTY=");
+	}
+
 	/* Soft wrapping is transparent to regex matching and copied selections. */
 	reset(8, 5);
 	put(wrapped);
@@ -390,6 +418,6 @@ main(void)
 		}
 	}
 
-	puts("PASS: regex selection expansion, paths, phrases, UTF-8, wrapping, history, dragging, alternate screen, reflow, long lines, coordinates off the screen");
+	puts("PASS: regex selection expansion, paths, assignments, phrases, UTF-8, wrapping, history, dragging, alternate screen, reflow, long lines, coordinates off the screen");
 	return 0;
 }

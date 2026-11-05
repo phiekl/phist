@@ -51,7 +51,7 @@ wchar_t *worddelimiters = L" \t\r\n`~!#$%^&*()=+[{]}\\|;:'\",<>?";
 /*
  * Additional multi-click selections, expanded from shortest to longest.
  * POSIX extended regexes; the first capture is selected.
- * Patterns select words/email addresses, paths, phrases and whole lines.
+ * Patterns select words/email addresses, paths, assignments, phrases and lines.
  * Paths allow final . and .. components and internal dots in filenames,
  * while leaving trailing sentence periods out.
  */
@@ -59,7 +59,8 @@ const char *selectionpatterns[] = {
 	"([0-9A-Za-z][0-9A-Za-z._@-]*[0-9A-Za-z]|[0-9A-Za-z])",
 	"(((~|\\.{1,2})?/|[0-9A-Za-z_.-]+/)([0-9A-Za-z_.-]+/)*"
 	"([0-9A-Za-z_.-]*[0-9A-Za-z_-]|\\.{1,2})/?)",
-	"([0-9A-Za-z][0-9A-Za-z._@,;[:space:]-]*[0-9A-Za-z][.:]?)",
+	"([A-Za-z_][0-9A-Za-z_]*=[^[:space:]'\"<>]*)",
+	"([0-9A-Za-z][0-9A-Za-z._@,;=[:space:]-]*[0-9A-Za-z][.:]?)",
 	"^(.*)$",
 	NULL
 };

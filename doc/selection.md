@@ -16,7 +16,9 @@ modifiers or dragging resets the sequence.
 
 `selectionpatterns` contains POSIX extended regular expressions; the first
 capture group supplies the selection. Defaults cover words and email
-addresses, paths, phrases and complete lines. Paths may be absolute,
+addresses, paths, assignments, phrases and complete lines. For example,
+successive selections in `LC_ALL=C.UTF-8` grow from `LC_ALL` to
+`LC_ALL=C.UTF-8` before including neighboring assignments. Paths may be absolute,
 relative, home-relative or parent-relative, with single-character
 components, final `.` or `..`, and optional trailing slashes. Internal
 filename dots remain selected; sentence-ending periods are excluded.
