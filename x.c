@@ -2812,23 +2812,6 @@ xluminance(const Color *color)
 	       0.0722 * xlinearcolor(color->color.blue);
 }
 
-static Color *
-xvisibleforeground(Color *fg, Color *bg)
-{
-	double light, dark, background;
-
-	if (mincontrast <= 1)
-		return fg;
-	background = xluminance(bg) + 0.05;
-	light = xluminance(fg) + 0.05;
-	dark = MIN(light, background);
-	light = MAX(light, background);
-	if (light / dark >= mincontrast)
-		return fg;
-	return xvisibilitycolor(background / 0.05 >= 1.05 / background ?
-	                        VISIBLE_BLACK : VISIBLE_WHITE);
-}
-
 /*
  * On a visual with a colormap, text keeps using a color's cell after it is drawn,
  * and another color in a freed cell would change that text. So colors are kept
@@ -2881,14 +2864,61 @@ xtempcolor(const XRenderColor *value, Color *temps, int *ntemps, Color *fallback
 	return &temps[(*ntemps)++];
 }
 
+/* Round toward the target so encoding cannot undershoot the contrast ratio. */
+static ushort
+xsrgbcolor(double value, int white)
+{
+	value = value <= 0.0031308 ? 12.92 * value :
+	        1.055 * pow(value, 1.0 / 2.4) - 0.055;
+	value = MAX(0, MIN(1, value)) * 65535.0;
+	return white ? ceil(value) : floor(value);
+}
+
+static Color *
+xvisibleforeground(Color *fg, Color *bg, Color *temps, int *ntemps)
+{
+	XRenderColor color;
+	double foreground, background, lighter, darker, amount, r, g, b;
+	int white;
+
+	if (mincontrast <= 1)
+		return fg;
+	foreground = xluminance(fg);
+	background = xluminance(bg) + 0.05;
+	if (MAX(foreground + 0.05, background) /
+	    MIN(foreground + 0.05, background) >= mincontrast)
+		return fg;
+
+	/* Mix with black or white in linear RGB, choosing the smaller change.
+	 * An unreachable target has amount 2, beyond a complete replacement. */
+	lighter = background * mincontrast - 0.05;
+	darker = background / mincontrast - 0.05;
+	lighter = lighter <= 1 && foreground < 1 ?
+	          (lighter - foreground) / (1 - foreground) : 2;
+	darker = darker >= 0 && foreground > 0 ?
+	         (foreground - darker) / foreground : 2;
+	white = lighter == 2 && darker == 2 ?
+	        1.05 / background > background / 0.05 : lighter <= darker;
+	amount = MIN(1, white ? lighter : darker);
+	r = xlinearcolor(fg->color.red);
+	g = xlinearcolor(fg->color.green);
+	b = xlinearcolor(fg->color.blue);
+	color.red = xsrgbcolor(r + (white - r) * amount, white);
+	color.green = xsrgbcolor(g + (white - g) * amount, white);
+	color.blue = xsrgbcolor(b + (white - b) * amount, white);
+	color.alpha = fg->color.alpha;
+	return xtempcolor(&color, temps, ntemps,
+	                  xvisibilitycolor(white ? VISIBLE_WHITE : VISIBLE_BLACK));
+}
+
 void
 xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, int y)
 {
 	int charlen = len * ((base.mode & ATTR_WIDE) && win.tw > win.cw ? 2 : 1);
 	int winx = borderpx + x * win.cw, winy = borderpx + y * win.ch,
 	    width = charlen * win.cw;
-	/* Up to true fg and bg, their reversals and faint fg, all freed below. */
-	Color *fg, *bg, *temp, temps[5];
+	/* True fg/bg, reversals, faint and contrast correction, all freed below. */
+	Color *fg, *bg, *temp, temps[6];
 	int ntemps = 0;
 	XRenderColor colfg, colbg;
 	XRectangle r;
@@ -2973,7 +3003,7 @@ xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, i
 		bg = xvisibilitycolor(base.mode & ATTR_REVERSE ?
 		                      VISIBLE_WHITE : VISIBLE_RED);
 	} else {
-		fg = xvisibleforeground(fg, bg);
+		fg = xvisibleforeground(fg, bg, temps, &ntemps);
 		/* Preserve ordinary blinking and the opt-out for concealed text. */
 		if ((base.mode & ATTR_BLINK && win.mode & MODE_BLINK) ||
 		    (base.mode & ATTR_INVISIBLE))

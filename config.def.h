@@ -15,7 +15,7 @@ static int borderpx = 0;
 
 /* Show SGR 8 (concealed) text as white on dark red. */
 static int revealhidden = 1;
-/* Replace low-contrast foregrounds with black or white; 0 disables it.
+/* Adjust low-contrast foregrounds toward black or white; 0 disables it.
  * Contrast ratio after faint/reverse: use a value between 1 and 4.5. */
 static double mincontrast = 3.0;
 

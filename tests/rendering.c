@@ -180,6 +180,57 @@ setcolor(Color *color, unsigned int rgb)
 }
 
 static void
+expectcontrast(void)
+{
+	double fg = xluminance(&glyphcolor) + 0.05;
+	double bg = xluminance(&backgroundcolor) + 0.05;
+	double ratio = MAX(fg, bg) / MIN(fg, bg);
+
+	assert(ratio >= mincontrast && ratio < mincontrast + 0.01);
+}
+
+static void
+testcontrast(void)
+{
+	unsigned int colors[] = {
+		0x000000, 0x101010, 0x555753, 0x808080, 0xaaaaaa, 0xffffff,
+		0x00002c, 0x800000, 0x008000, 0x000080, 0xff0000, 0x00ff00,
+		0x0000ff, 0xffff00, 0x00ffff, 0xff00ff,
+	};
+	double limits[] = { 1, 1.5, 3, 4.5 }, ratio, original, a, b;
+	Color fg, bg, temps[1], *adjusted;
+	size_t i, j, k;
+	int ntemps;
+
+	for (k = 0; k < LEN(limits); k++) {
+		mincontrast = limits[k];
+		for (i = 0; i < LEN(colors); i++) {
+			setcolor(&fg, colors[i]);
+			for (j = 0; j < LEN(colors); j++) {
+				setcolor(&bg, colors[j]);
+				a = xluminance(&fg) + 0.05;
+				b = xluminance(&bg) + 0.05;
+				original = MAX(a, b) / MIN(a, b);
+				ntemps = 0;
+				adjusted = xvisibleforeground(&fg, &bg, temps, &ntemps);
+				a = xluminance(adjusted) + 0.05;
+				ratio = MAX(a, b) / MIN(a, b);
+				assert(ratio >= mincontrast);
+				if (original >= mincontrast)
+					assert(adjusted == &fg && !ntemps);
+				else
+					assert(ratio < mincontrast + 0.01 && ntemps == 1);
+				assert(bg.pixel == colors[j]);
+				while (ntemps)
+					XftColorFree(xw.dpy, xw.vis, xw.cmap, &temps[--ntemps]);
+			}
+		}
+	}
+	mincontrast = 3;
+	puts("PASS: gradual contrast correction on dark/light backgrounds and saturated colors");
+}
+
+static void
 testvisibility(void)
 {
 	Glyph base = { .u = 'X', .fg = 1, .bg = 2, .ucolor = UCOLOR_DEFAULT };
@@ -195,12 +246,26 @@ testvisibility(void)
 	setcolor(&dc.col[1], 0x101010);
 	setcolor(&dc.col[2], 0x111111);
 	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
-	assert(glyphcolor.pixel == 0xffffff && backgroundcolor.pixel == 0x111111);
+	expectcontrast();
+	assert(glyphcolor.pixel != 0xffffff && backgroundcolor.pixel == 0x111111);
 	/* Different indices can resolve to exactly the same RGB value. */
 	setcolor(&dc.col[1], 0xffffff);
 	setcolor(&dc.col[2], 0xffffff);
 	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
-	assert(glyphcolor.pixel == 0 && backgroundcolor.pixel == 0xffffff);
+	expectcontrast();
+	assert(glyphcolor.pixel != 0 && backgroundcolor.pixel == 0xffffff);
+	/* Vim's bold black comments need only a small lift from their dark gray. */
+	base.fg = 0;
+	base.mode = ATTR_BOLD;
+	setcolor(&dc.col[8], 0x555753);
+	setcolor(&dc.col[2], 0x00002c);
+	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
+	expectcontrast();
+	assert(glyphcolor.color.red > 0x5555 && glyphcolor.color.red < 0x6060);
+	assert(glyphcolor.color.green > glyphcolor.color.red);
+	assert(glyphcolor.color.red > glyphcolor.color.blue);
+	base.fg = 1;
+	base.mode = 0;
 	/* Legible colors remain unchanged, including after reversal. */
 	setcolor(&dc.col[1], 0xeeeeee);
 	setcolor(&dc.col[2], 0x111111);
@@ -213,22 +278,26 @@ testvisibility(void)
 	base.mode = ATTR_FAINT;
 	setcolor(&dc.col[1], 0x888888);
 	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
-	assert(glyphcolor.pixel == 0xffffff);
+	expectcontrast();
+	assert(glyphcolor.pixel != 0xffffff);
 	base.mode = ATTR_REVERSE;
 	setcolor(&dc.col[1], 0xeeeeee);
 	setcolor(&dc.col[2], 0xefefef);
 	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
-	assert(glyphcolor.pixel == 0 && backgroundcolor.pixel == 0xeeeeee);
+	expectcontrast();
+	assert(glyphcolor.pixel != 0 && backgroundcolor.pixel == 0xeeeeee);
 	base.mode = 0;
 	win.mode = MODE_REVERSE;
 	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
-	assert(glyphcolor.pixel == 0xffffff && backgroundcolor.pixel == 0x101010);
+	expectcontrast();
+	assert(glyphcolor.pixel != 0xffffff && backgroundcolor.pixel == 0x101010);
 	win.mode = 0;
 	/* RGB colors and backgrounds retain their exact original values. */
 	base.fg = TRUECOLOR(20, 21, 22);
 	base.bg = TRUECOLOR(21, 22, 23);
 	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
-	assert(glyphcolor.pixel == 0xffffff && backgroundcolor.pixel == 0x141516);
+	expectcontrast();
+	assert(glyphcolor.pixel != 0xffffff && backgroundcolor.pixel == 0x141516);
 	mincontrast = 0;
 	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
 	assert(glyphcolor.pixel == 0x131415 && backgroundcolor.pixel == 0x141516);
@@ -273,7 +342,7 @@ testvisibility(void)
 	recordglyphs = 1;
 	xdrawline(line, 0, 0, 8);
 	assert(painted[0] == 0xffffff && painted[3] == 0xffffff);
-	assert(painted[5] == 0xffffff);
+	assert(painted[5] != 0 && painted[5] != 0xffffff);
 	assert(backgrounds[0] == 0x990000 && backgrounds[3] == 0x990000);
 	assert(backgrounds[4] == 0 && backgrounds[5] == 0);
 	assert(line[0].mode & ATTR_INVISIBLE);
@@ -389,7 +458,7 @@ testtempcolors(void)
 		win.mode = i & 1 ? MODE_REVERSE : 0;
 		base.mode = i & 2 ? ATTR_FAINT : 0;
 		xdrawglyphfontspecs(&spec, base, 1, 1, 1);
-		assert(allocations == 2 + (i & 1 ? 2 : 0) + (i & 2 ? 1 : 0));
+		assert(allocations == 3 + (i & 1 ? 2 : 0) + (i & 2 ? 1 : 0));
 		assert(frees == allocations);
 	}
 
@@ -655,6 +724,7 @@ main(void)
 		free(xw.specbuf);
 	}
 	puts("PASS: underline styles, RGB cache reuse/eviction, fallback, balanced frees and a reused GC");
+	testcontrast();
 	testvisibility();
 	testconcealedurl();
 	testundercurl();

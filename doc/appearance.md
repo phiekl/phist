@@ -125,7 +125,7 @@ still reference their color cells, so phist caches up to 128 colors and
 redraws the screen when recycling them. Other visuals release temporary
 colors after drawing. Allocation failure uses the default foreground or
 background, or leaves faint text undimmed.
-The fixed colors of concealed and low-contrast text, dialogs and bars use the
+The fixed colors of concealed text, dialogs and bars use the
 nearest palette color until they can be allocated. The palette itself is
 required when phist starts. A later reset, by `ESC c` or `OSC 104`, allocates
 the new palette first and keeps the one in use if that fails.
@@ -255,12 +255,17 @@ red. Fixed warning colors are independent of application palette changes.
 Concealed text remains visible while blinking, and reverse video swaps the
 warning colors so selections and URL-copy flashes remain apparent.
 
-`mincontrast = 3.0` replaces a glyph foreground below a 3:1 contrast ratio
-with whichever of black or white contrasts better against its background.
+`mincontrast = 3.0` adjusts a glyph foreground below a 3:1 contrast ratio
+just enough to reach that ratio. It mixes the original color toward black
+or white in linear RGB, choosing the smaller blend. Dark gray comments
+stay gray, and colored text keeps its color instead of jumping to black
+or white. Colors that already meet the threshold remain unchanged.
 The check uses resolved palette or RGB colors after faint and reverse
 attributes. It preserves backgrounds, including spaces, and leaves explicit
 underline colors alone. Stored characters and copied text are unchanged:
-these options change rendering only.
+these options change rendering only. Corrected colors use the normal
+temporary color allocation and colormap cache; allocation failure falls
+back to black or white for visibility.
 
 Set either option to zero to disable that behavior. When retaining an older
 `config.h`, add both definitions from `config.def.h` before building.
