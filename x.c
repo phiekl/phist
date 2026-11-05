@@ -4084,7 +4084,6 @@ kpress(XEvent *ev)
 	KeySym ksym = NoSymbol, lower;
 	char buf[64], *customkey;
 	int len;
-	uint mods;
 	Rune c;
 	Status status;
 	Shortcut *bp;
@@ -4100,7 +4099,6 @@ kpress(XEvent *ev)
 	if (vimkey(ksym, e->state, buf, len))
 		return;
 	lower = ksym >= XK_A && ksym <= XK_Z ? ksym + XK_a - XK_A : ksym;
-	mods = e->state & ~(ignoremod | LockMask);
 	if (urlboxkey(ksym, e->state))
 		return;
 	if (pastekey(ksym, e->state))
@@ -4117,15 +4115,6 @@ kpress(XEvent *ev)
 			return;
 		}
 	}
-	/* Honor configured shortcuts first, but keep disabled, unbound keys
-	 * from falling through as control bytes or terminal mappings. */
-	if (ksym == XK_Break || ksym == XK_Print ||
-	    (mods == (ControlMask | ShiftMask) &&
-	     (lower == XK_v || lower == XK_c || lower == XK_y ||
-	      ksym == XK_Num_Lock)) ||
-	    (lower == XK_v && mods == ControlMask))
-		return;
-
 	/* 2. custom keys from config.h */
 	if ((customkey = kmap(ksym, e->state))) {
 		sendinput(customkey, strlen(customkey), 1);

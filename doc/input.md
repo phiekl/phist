@@ -10,11 +10,16 @@ screen; a selection remains attached to its text. Protocol replies use a
 separate path, so cursor-position queries leave the history view in place.
 OSC color replies are not locally echoed.
 
-Ctrl+Shift+V, Ctrl+Shift+C, Ctrl+Shift+Y, Ctrl+Shift+Num Lock, Break and
-Print Screen (with any modifiers) are ignored when unbound. Bindings
-configured in `shortcuts` still take precedence. Ctrl+V starts [keyboard
-selection](selection.md#keyboard-selection), so programs never receive it.
-Shift+Insert pastes from PRIMARY.
+Outside phist's modal interfaces, bindings configured in `shortcuts` take
+precedence over terminal key mappings and text input. Unbound keys follow
+the normal input path, including Ctrl+Shift+C/V/Y, Ctrl+Shift+Num Lock,
+Break and Print Screen. A key sends input when it has a terminal mapping
+or produces text; Ctrl+Shift+C, for example, can send the same control byte
+as Ctrl+C.
+
+Ctrl+V starts [keyboard selection](selection.md#keyboard-selection) by
+default. Rebinding that shortcut allows Ctrl+V to reach programs. Inside
+keyboard selection, Ctrl+V selects a block. Shift+Insert pastes from PRIMARY.
 
 Run `LC_ALL=C.UTF-8 sh tests/replies.sh` for reply and empty/nonempty-input
 regressions. History selection behavior is also covered by

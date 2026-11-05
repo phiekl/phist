@@ -3538,7 +3538,7 @@ testvimkeys(int fd)
 	assert(!nfades);
 
 	/* Ctrl+V selects a block rather than starting the mode again, also
-	 * with Caps Lock. Disabled keys stay inert. */
+	 * with Caps Lock. Unhandled keys stay inert inside the mode. */
 	press(XK_v, ControlMask);
 	assert(tvimactive() == VIM_BLOCK);
 	presentframe();
@@ -3707,29 +3707,42 @@ testvimkeys(int fd)
 static void
 testrestoredshortcuts(int fd)
 {
-	static const struct { KeySym key; uint mod; } keys[] = {
-		{ XK_Print, 0 }, { XK_Break, 0 },
-		{ XK_C, ControlMask | ShiftMask }, { XK_V, ControlMask | ShiftMask },
-		{ XK_Y, ControlMask | ShiftMask }, { XK_Num_Lock, ControlMask | ShiftMask },
+	static const struct { KeySym key; uint mod; const char *text; } keys[] = {
+		{ XK_Print, 0, "" }, { XK_Print, ControlMask, "" },
+		{ XK_Break, 0, "" }, { XK_Break, ShiftMask, "" },
+		{ XK_C, ControlMask | ShiftMask, "\003" },
+		{ XK_V, ControlMask | ShiftMask, "\026" },
+		{ XK_Y, ControlMask | ShiftMask, "\031" },
+		{ XK_Num_Lock, ControlMask | ShiftMask, "" },
 	};
 	Shortcut saved = shortcuts[0];
+	Key savedkey = key[0];
+	KeySym savedmapped = mappedkeys[0];
 	int i, before;
 
-	lookuptext = "\003";
 	setsel(xstrdup("configured copy"), CurrentTime);
 	for (i = 0; i < LEN(keys); i++) {
+		lookuptext = keys[i].text;
 		shortcuts[0].keysym = keys[i].key;
 		shortcuts[0].mod = keys[i].mod;
 		shortcuts[0].func = clipcopy;
 		before = owned;
 		press(keys[i].key, keys[i].mod);
 		assert(owned == before + 1 && !strcmp(xsel.clipboard, xsel.primary));
+		expect(fd, NULL);
 		shortcuts[0].keysym = saved.keysym;
 		shortcuts[0].mod = saved.mod;
 		shortcuts[0].func = saved.func;
 		press(keys[i].key, keys[i].mod);
 		assert(owned == before + 1);
-		expect(fd, NULL);
+		expect(fd, keys[i].text);
+		/* Unbound keys also reach configured terminal mappings. */
+		mappedkeys[0] = keys[i].key;
+		key[0] = (Key){ keys[i].key, keys[i].mod, "\033[99~", 0, 0 };
+		press(keys[i].key, keys[i].mod);
+		expect(fd, "\033[99~");
+		key[0] = savedkey;
+		mappedkeys[0] = savedmapped;
 	}
 	/* A configured copy binding also works in the paste's full view. */
 	shortcuts[0].keysym = XK_C;
@@ -3746,6 +3759,25 @@ testrestoredshortcuts(int fd)
 	shortcuts[0].keysym = saved.keysym;
 	shortcuts[0].mod = saved.mod;
 	shortcuts[0].func = saved.func;
+	/* Rebinding keyboard selection frees Ctrl+V for the child. */
+	for (i = 0; i < LEN(shortcuts); i++) {
+		uint savedmod;
+
+		if (shortcuts[i].func != vimstart)
+			continue;
+		savedmod = shortcuts[i].mod;
+		shortcuts[i].mod = ControlMask | Mod1Mask;
+		lookuptext = "\026";
+		press(XK_v, ControlMask);
+		expect(fd, "\026");
+		press(XK_V, ControlMask | LockMask);
+		expect(fd, "\026");
+		assert(!tvimactive());
+		press(XK_v, ControlMask | Mod1Mask);
+		assert(tvimactive());
+		press(XK_Escape, 0);
+		shortcuts[i].mod = savedmod;
+	}
 	lookuptext = "x";
 	expect(fd, NULL);
 }
