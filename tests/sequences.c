@@ -97,6 +97,30 @@ main(void)
 	assert(!strcmp(puterr("\033[0;0%m"), "erresc: unknown csi ESC[0;0%m\n"));
 	reset(10, 4);
 
+	/* Vim's keyboard-option query is not SGR 4 (underline). The next
+	 * line number must stay plain, including when SSH splits the query. */
+	for (int split = 0; split <= 5; split++) {
+		const char query[] = "\033[?4m";
+
+		reset(20, 4);
+		twrite(query, split, 0);
+		twrite(query + split, sizeof(query) - 1 - split, 0);
+		put("\033[38;5;130m  2 \033[mduodiff()");
+		for (int x = 0; x < 13; x++)
+			assert(!(term.line[0][x].mode & (ATTR_UNDERLINE | ATTR_USTYLE)));
+		assert(term.line[0][2].u == '2' && term.line[0][2].fg == 130);
+		assert(term.line[0][4].u == 'd');
+	}
+	/* Other private m queries must not reset or change active styling. */
+	put("\033[1;3;4;31;44m");
+	{
+		Glyph attr = term.c.attr;
+
+		put("\033[?0m\033[?1m\033[?7m");
+		assert(!ATTRCMP(term.c.attr, attr));
+	}
+	reset(10, 4);
+
 	/* Charset designators wider than a byte are rejected, not truncated. */
 	put("\033(0");
 	assert(term.trantbl[0] == CS_GRAPHIC0);

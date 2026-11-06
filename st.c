@@ -4683,7 +4683,9 @@ csihandle(void)
 		tsetmode(csiescseq.priv, 1, csiescseq.arg, csiescseq.narg);
 		break;
 	case 'm': /* SGR -- Terminal attribute (color) */
-		tsetattr(csiescseq.arg, csiescseq.narg);
+		/* Private m queries (XTQMODKEYS) are not text attributes. */
+		if (!csiescseq.priv)
+			tsetattr(csiescseq.arg, csiescseq.narg);
 		break;
 	case 'n': /* DSR -- Device Status Report */
 		switch (csiescseq.arg[0]) {

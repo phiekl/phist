@@ -16,6 +16,11 @@ Negative CSI parameters become zero; large positive values saturate at
 65,535 before narrowing to `int`. This prevents signed overflow in cursor
 arithmetic while still moving to the screen edge for very large requests.
 
+Private keyboard-option queries (`CSI ? Pp m`, XTQMODKEYS) are ignored
+without changing text attributes. In particular, Vim's `CSI ? 4 m` must not
+enable underlining on the next line number. `tests/sequences.sh` covers
+this sequence at each byte boundary and preserves existing styling.
+
 Overwriting a wide character tests `ATTR_WIDE` as a bit, including on styled
 cells. A new wide glyph one column before an existing styled wide glyph
 clears that displaced glyph's trailing dummy instead of leaving an orphan.
