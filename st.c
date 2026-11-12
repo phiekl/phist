@@ -4906,21 +4906,13 @@ osc_link(char *text, size_t len)
 	*uri++ = '\0';
 	if (!(urilen = len - (uri - text)) || urilen > URLTARGET_MAX)
 		return;
-	/* URI schemes and encoded targets are ASCII; never hide controls or
-	 * whitespace inside the URL shown to the user. */
-	if (!isalpha((uchar)*uri))
+	if (strspn(uri, " ") == urilen)
 		return;
-	for (p = uri + 1; *p && (isalnum((uchar)*p) || strchr("+.-", *p)); p++)
-		;
-	if (*p != ':')
-		return;
-	for (p = uri; *p; p++) {
-		if (!BETWEEN((uchar)*p, 0x21, 0x7e))
+	/* Copy targets verbatim: allow printable ASCII and space, with no
+	 * scheme or percent-encoding requirement. */
+	for (p = uri; *p; p++)
+		if (!BETWEEN((uchar)*p, 0x20, 0x7e))
 			return;
-		if (*p == '%' && (!p[1] || !p[2] ||
-		                 !isxdigit((uchar)p[1]) || !isxdigit((uchar)p[2])))
-			return;
-	}
 	for (p = text; *p; p = end) {
 		end = strchr(p, ':');
 		if (end)

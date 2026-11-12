@@ -3158,6 +3158,60 @@ testhyperlinkbox(int fd)
 	press(XK_Escape, 0);
 	expect(fd, NULL);
 
+	/* The bar and both clipboard selections trim boundary spaces while
+	 * preserving internal spaces, semicolons and literal percent signs. */
+	{
+		static const char *padded[] = {
+			" /tmp/report 100%; raw%ZZ ~ ",
+			"   /tmp/report 100%; raw%ZZ ~",
+			"/tmp/report 100%; raw%ZZ ~   "
+		};
+		static const char plain[] = "/tmp/report 100%; raw%ZZ ~";
+		size_t i;
+		int row;
+
+		for (i = 0; i < LEN(padded); i++) {
+			testmouse_put("\033[H\033]8;;");
+			testmouse_put(padded[i]);
+			testmouse_put("\033\\Project\033]8;;\033\\");
+			clickat(1, 0);
+			assert(urlbox.text && !strcmp(urlbox.text, plain));
+			assert(urlbox.width == strlen(plain) && !urlbox.top);
+			presentframe();
+			row = dialogrow(plain);
+			assert(row >= 0 && painted[row][urlbox.col] == '/');
+			assert(painted[row][urlbox.col + strlen(plain) - 1] == '~');
+			if (i == 0) {
+				e.type = ButtonPress;
+				e.xbutton.x = borderpx + urlbox.col * win.cw + 1;
+				e.xbutton.y = urlbox.y + 1;
+				bpress(&e);
+				e.type = ButtonRelease;
+				brelease(&e);
+			} else
+				press(XK_Return, 0);
+			assert(urlbox.flash && !strcmp(xsel.primary, plain) &&
+			       !strcmp(xsel.clipboard, plain));
+			press(XK_Escape, 0);
+			expect(fd, NULL);
+		}
+		/* Padding alone must not make a short target scroll. */
+		memset(longuri, ' ', sizeof(longuri) - 1);
+		longuri[sizeof(longuri) - 2] = 'x';
+		longuri[sizeof(longuri) - 1] = '\0';
+		urlboxopen(xstrdup(longuri), 0, 0, 0);
+		assert(urlbox.text && !strcmp(urlbox.text, "x"));
+		assert(urlbox.width == 1 && !urlbox.top);
+		/* Space-only targets leave the label as plain text; clicking it
+		 * opens no box and copies nothing. */
+		press(XK_Escape, 0);
+		before = owned;
+		testmouse_put("\033[H\033]8;;   \033\\Project\033]8;;\033\\");
+		clickat(1, 0);
+		assert(!urlbox.text && owned == before);
+		expect(fd, NULL);
+	}
+
 	/* It starts below the label whichever character is clicked, fading both
 	 * ways, and goes above near the bottom edge. */
 	testmouse_put("\033[4;32H\033]8;;https://example.com\033\\Project\033]8;;\033\\");

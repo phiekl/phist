@@ -738,9 +738,21 @@ urlboxlayout(void)
 static void
 urlboxopen(char *text, int col, int row, int endrow)
 {
+	char *start = text;
+	size_t len;
+
 	pasteclear();
 	free(urlbox.text);
 	memset(&urlbox, 0, sizeof(urlbox));
+	/* Trim only boundary spaces; the displayed text is also what we copy. */
+	while (*start == ' ')
+		start++;
+	len = strlen(start);
+	while (len && start[len - 1] == ' ')
+		len--;
+	/* osc_link() rejects space-only targets, so text remains. */
+	memmove(text, start, len);
+	text[len] = '\0';
 	urlbox.text = text;
 	urlbox.anchorcol = col;
 	urlbox.anchorrow = row;

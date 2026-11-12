@@ -73,16 +73,21 @@ normal selection. Explicit links take precedence over automatically
 detected URLs in their labels. `urlprefixes` and `urlchars` configure only
 automatic text detection; OSC 8 supplies its target directly.
 
-The protocol is `OSC 8 ; params ; URI ST`; an empty URI closes the link.
+The protocol is `OSC 8 ; params ; URI ST`; an empty or space-only target
+closes the link.
 BEL is also accepted as a terminator. The optional `id=name` parameter
 groups cells with the same target and ID; other parameters are ignored.
 Semicolons in the URI are preserved. SGR changes, including SGR 0, keep
 the active hyperlink. Saved cursors retain it, while terminal reset closes
 it. Links on retained history cells survive reset along with their text.
 
-Targets are limited to 2,048 bytes and must be ASCII URIs with a scheme,
-no literal whitespace or control bytes, and valid percent escapes. Encode
-non-ASCII filenames and spaces in the URI. IDs are limited to 256 bytes.
+Targets are limited to 2,048 bytes and accept printable ASCII plus space
+(`0x20`–`0x7e`). As an extension to OSC 8's URI targets, a scheme is not
+required and percent signs are literal; targets may contain plain paths or
+other text. The copy box trims leading and trailing spaces from both the
+displayed and copied target, preserving spaces within the text. Targets
+containing only spaces leave their labels as ordinary text. Tabs, newlines,
+control bytes and non-ASCII bytes are rejected. IDs are limited to 256 bytes.
 A malformed or oversized open closes the previous link and leaves the
 following label as ordinary text. Targets are copied as data; phist does
 not invoke a browser or URI handler.

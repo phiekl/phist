@@ -213,6 +213,55 @@ testlookupbounds(void)
 }
 
 static void
+testtargets(void)
+{
+	static const char *accepted[] = {
+		"example.com", "/tmp/report.txt", "../report.txt",
+		"https://example.com/a b", "https://example.com/%",
+		" /tmp/report 100%; raw%ZZ ~ "
+	};
+	static const char *rejected[] = {
+		"a\tb", "a\nb", "a\rb", "a\001b", "a\177b", "caf\303\251",
+		" ", "   "
+	};
+	static const char nul[] = "\033]8;;before\0after\033\\";
+	char printable[0x7e - 0x20 + 2];
+	size_t i;
+
+	for (i = 0; i < LEN(accepted); i++) {
+		reset(20, 3);
+		openlink("", accepted[i]);
+		put("label");
+		openlink("", "");
+		expecturl(0, 0, accepted[i]);
+		assert(!term.c.attr.link);
+		checkrefs();
+	}
+	for (i = 0; i < sizeof(printable) - 1; i++)
+		printable[i] = 0x20 + i;
+	printable[i] = '\0';
+	reset(20, 3);
+	openlink("", printable);
+	put("label");
+	expecturl(0, 0, printable);
+	for (i = 0; i < LEN(rejected); i++) {
+		openlink("", "old target");
+		assert(term.c.attr.link &&
+		       !strcmp(hlinks.slots[term.c.attr.link].uri, "old target"));
+		openlink("", rejected[i]);
+		put("x");
+		assert(!term.c.attr.link && !term.line[0][5 + i].link);
+		checkrefs();
+	}
+	openlink("", "old target");
+	assert(term.c.attr.link &&
+	       !strcmp(hlinks.slots[term.c.attr.link].uri, "old target"));
+	twrite(nul, sizeof(nul) - 1, 0);
+	assert(!term.c.attr.link);
+	checkrefs();
+}
+
+static void
 testanonymous(const char *target)
 {
 	int i, x, y, right, bottom;
@@ -387,10 +436,10 @@ main(void)
 	 * its target to the label of an invalid one. URI semicolons are kept. */
 	reset(80, 3);
 	openlink("", target);
-	openlink("", "https://example.com/a b");
+	openlink("", "https://example.com/a\tb");
 	put("plain");
 	assert(!term.line[0][0].link && !term.c.attr.link);
-	openlink("", "https://example.com/%");
+	openlink("", "https://example.com/\177");
 	assert(!term.c.attr.link);
 	openlink("", target);
 	put("\033]8\a");
@@ -467,6 +516,7 @@ main(void)
 		checkrefs();
 		assert(!hlinks.used);
 	}
+	testtargets();
 	testanonymous(target);
 	testcollisions();
 	testseed();
