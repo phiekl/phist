@@ -294,6 +294,32 @@ main(void)
 		assert(sel.ob.x == -1);
 	}
 
+	/* Inserting or deleting characters ends a selection on the cells they
+	 * move, which would select other text, but not one before them. */
+	{
+		static const char *const edits[] = {
+			"\r\033[P",  /* DCH before the selection */
+			"\r\033[@",  /* ICH before the selection */
+			"\r\033[3C\033[P", /* DCH inside it */
+			"\r\033[4h\033[2Cx\033[4l", /* IRM typing before it */
+		};
+
+		for (i = 0; i < (int)LEN(edits); i++) {
+			reset(10, 3);
+			put("ABCDE");
+			drag(2, 0, 3);
+			expectcurrent("CD");
+			put(edits[i]);
+			assert(sel.ob.x == -1 && !selected(2, 0));
+		}
+		/* Edits after the selection leave it on its text. */
+		reset(10, 3);
+		put("ABCDE");
+		drag(1, 0, 2);
+		put("\r\033[4C\033[P\033[@\033[4hx\033[4l");
+		expectcurrent("BC");
+	}
+
 	/* Without history, scrolled-off rows are gone and others move up. */
 	reset(10, 3);
 	sb_setlimit(0);

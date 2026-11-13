@@ -223,6 +223,7 @@ static void tdumpline(Line);
 static void tdump(void);
 static void tclearregion(int, int, int, int);
 static void tfixwide(int, int);
+static void tselshifted(int, int);
 static void tcursor(int);
 static void tdeletechar(int);
 static void tdeleteline(int);
@@ -4127,6 +4128,24 @@ tclearregion(int x1, int y1, int x2, int y2)
 }
 
 /*
+ * End a selection on row y from column x on, whose cells an insertion or
+ * deletion is about to move: the same columns would then select other
+ * text. Overwriting selected text ends a selection the same way.
+ */
+void
+tselshifted(int y, int x)
+{
+	if (sel.ob.x == -1)
+		return;
+	for (; x < term.col; x++) {
+		if (selected(x, screenrow(y))) {
+			selclear();
+			return;
+		}
+	}
+}
+
+/*
  * Blank whichever half of a wide glyph lost its other half at the
  * boundary between columns x-1 and x of row y, as after cells were
  * erased, inserted or deleted there: a wide glyph at x-1 without its dummy
@@ -4173,6 +4192,7 @@ tdeletechar(int n)
 	size = term.col - src;
 	line = term.line[term.c.y];
 
+	tselshifted(term.c.y, dst);
 	/* Keep the surviving suffix of an anonymous label separate from a
 	 * preceding label sharing its target, even if its first glyph is cut. */
 	if (size && line[src].link)
@@ -4209,6 +4229,7 @@ tinsertblank(int n)
 	size = term.col - dst;
 	line = term.line[term.c.y];
 
+	tselshifted(term.c.y, src);
 	linkmove(&line[dst], &line[src], size);
 	tclearregion(src, term.c.y, dst - 1, term.c.y);
 	/* A wide glyph pushed to the last column lost its dummy cell. */
@@ -6135,6 +6156,7 @@ check_control_code:
 	}
 
 	if (IS_SET(MODE_INSERT) && term.c.x+width < term.col) {
+		tselshifted(term.c.y, term.c.x);
 		linkmove(gp+width, gp, term.col - term.c.x - width);
 		gp->mode &= ~ATTR_WIDE;
 		inserted = 1;

@@ -472,6 +472,16 @@ testoutput(void)
 	keys("v");
 	assert(tvimactive() == VIM_VISUAL);
 	tvimend();
+
+	/* Characters deleted before a selection move its text away from its
+	 * columns: the selection ends, and y doesn't copy what moved in. */
+	screen(20, 4, "ABCDE");
+	keys("llvl");
+	expectsel("CD");
+	put("\r\033[P");
+	keys("y");
+	assert(tvimactive() == VIM_NORMAL && sel.ob.x == -1);
+	tvimend();
 }
 
 static void

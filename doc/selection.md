@@ -34,9 +34,12 @@ by the whole logical line, keeping long wrapped lines practical.
 
 When regional scrolling moves selected text intact, the existing bounds move
 without rerunning the regexes. If scrolling changes selected text or drops
-selected rows across a margin, the selection is cleared. Selections
-otherwise follow their text through history, screen switches and typing;
-resizing ends them because text can reflow between rows.
+selected rows across a margin, the selection is cleared. Inserting or
+deleting characters (ICH, DCH or typing in insert mode) on a row ends a
+selection on the cells they move, as the same columns would then select
+other text; one before them stays. Selections otherwise follow their text
+through history, screen switches and typing; resizing ends them because
+text can reflow between rows.
 
 Selection endpoints are clamped to the nearest screen cell before word
 or line snapping. A column just beyond the right edge therefore cannot
@@ -107,8 +110,8 @@ registers, marks or text objects.
 
 Output can continue meanwhile. The cursor and selection stay on their text,
 and the view stops following output once the cursor would scroll out of it.
-Overwriting selected text or evicting it from the history ends the selection,
-as with the mouse. Resizing the window also ends it, as reflow moves the text,
+Overwriting selected text, moving it by inserting or deleting characters, or
+evicting it from the history ends the selection, as with the mouse. Resizing the window also ends it, as reflow moves the text,
 and keeps the cursor at the same place on screen. Switching between the main
 and alternate screens, or a terminal reset, ends the mode.
 
