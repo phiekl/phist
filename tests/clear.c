@@ -63,6 +63,16 @@ main(void)
 		line_is(term.line[0], "new prompt");
 	}
 
+	/* Underlined blanks and a colored background are kept, as in
+	 * storage; blanks with only a foreground color are padding. */
+	reset(20, 5);
+	put("text\r\n\033[4m   \033[m\r\n\033[41m\033[K\033[m\r\n\033[31m   \033[m");
+	put("\033[2J");
+	assert(sb.len == 3);
+	line_is(sb_get(0), "text");
+	assert(sb_get(1)[0].mode & ATTR_UNDERLINE);
+	assert(sb_get(2)[0].bg == 1 && sb_get(2)[term.col - 1].bg == 1);
+
 	reset(20, 5);
 	put("top\r\nmiddle\r\nbottom\033[2;3H\033[J");
 	assert(sb.len == 0 && term.c.x == 2 && term.c.y == 1);

@@ -181,7 +181,9 @@ alternate-screen modes and contents, tabs, padding and wide characters.
 
 A full main-screen erase preserves its used rows in history. This covers
 `CSI 2 J` and `CSI 0 J` with the cursor at home, so `clear` and Ctrl+L leave
-the previous view accessible. Trailing empty rows are omitted. The last
+the previous view accessible. Trailing empty rows are omitted, by the
+padding rule above: underlined, reverse or colored-background blanks count
+as used, while blanks with only a foreground color do not. The last
 saved logical line is ended even if its final physical row was wrapped;
 later output cannot continue a URL through the clear boundary.
 

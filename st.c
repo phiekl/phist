@@ -2413,8 +2413,9 @@ sb_preserve_screen(void)
 	Line line;
 	uint64_t oldstart = sb_view_start();
 
-	/* Avoid adding a screenful of empty rows after every clear. */
-	while (last >= 0 && tlinelen(term.line[last]) == 0)
+	/* Avoid adding a screenful of empty rows after every clear. Styled
+	 * blanks are content, by the padding rule storage uses. */
+	while (last >= 0 && sb_contentwidth(term.line[last], term.col) == 0)
 		last--;
 	for (y = 0; y <= last; y++)
 		sb_push(term.line[y]);
