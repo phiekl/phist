@@ -193,7 +193,10 @@ and Ctrl+L use `CSI H CSI 2 J`, which preserves the screen in history.
 
 RIS (`ESC c`), also sent by `reset` through terminfo's `rs1=\Ec`, leaves the
 alternate screen if needed and saves the main screen to history before
-resetting modes, charsets, colors, tabs, cursor and scroll region. Existing
+resetting modes, charsets, colors, tabs, cursor and scroll region. The modes
+include the window's: application cursor keys and keypad, reverse video,
+cursor visibility, eight-bit input and bracketed paste; Num Lock's keypad
+choice, set by the user, stays. Existing
 history remains available above the clean screen. The alternate screen's
 contents are not added to history. Internally, startup's `treset()` still
 discards history; RIS from output calls `tresetstate()`, which resets
@@ -201,7 +204,7 @@ everything but history.
 
 Run `seq 1 200; printf '\033c'`, then scroll back: both earlier history and
 the former main screen remain accessible. `tests/clear.sh` covers reset from
-both screens as well as ED 3 and full-screen clearing.
+both screens, the window modes it turns off, ED 3 and full-screen clearing.
 
 To check ED 3, run `seq 1 200; printf '\033[3J'` and scroll back with the
 wheel or Shift+PageUp: the earlier lines remain accessible.

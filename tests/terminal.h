@@ -40,7 +40,10 @@ void xsettitle(char *s) { snprintf(lasttitle, sizeof(lasttitle), "%s", s ? s : "
 static char lastcwd[16385];
 void xsetcwd(const char *s) { snprintf(lastcwd, sizeof(lastcwd), "%s", s ? s : ""); }
 int xsetcursor(int a) { return 0; }
-void xsetmode(int a, unsigned int b) {}
+#ifndef XSETMODE
+#define XSETMODE(set, flags) /* tests may track the window's modes */
+#endif
+void xsetmode(int set, unsigned int flags) { XSETMODE(set, flags); }
 #ifndef XSETSEL
 #define XSETSEL(s) /* tests may keep the text, which they then own */
 #endif

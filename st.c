@@ -5927,8 +5927,10 @@ eschandle(Rune ascii)
 			selclear();
 		resettitle();
 		xloadcols();
-		xsetmode(0, MODE_HIDE);
-		xsetmode(0, MODE_BRCKTPASTE);
+		/* Every window mode an application can set starts off. Num Lock's
+		 * keypad choice is the user's, and so are focus and visibility. */
+		xsetmode(0, MODE_APPKEYPAD | MODE_APPCURSOR | MODE_REVERSE |
+		         MODE_HIDE | MODE_8BIT | MODE_BRCKTPASTE);
 		break;
 	case '=': /* DECPAM -- Application keypad */
 		xsetmode(1, MODE_APPKEYPAD);

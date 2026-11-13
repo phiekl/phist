@@ -1,3 +1,5 @@
+static unsigned int winmode; /* the window modes, as x.c keeps them */
+#define XSETMODE(set, flags) ((set) ? (winmode |= (flags)) : (winmode &= ~(flags)))
 #include "terminal.h"
 
 static void
@@ -114,6 +116,17 @@ main(void)
 	assert(!IS_SET(MODE_ALTSCREEN) && sb.len == 4);
 	line_is(sb_get(3), "main");
 	screen_is_blank();
+	/* It also turns off every window mode applications set: application
+	 * cursor keys and keypad, reverse video, a hidden cursor, eight-bit
+	 * input and bracketed paste, but not the user's Num Lock choice. */
+	winmode = MODE_NUMLOCK;
+	put("\033[?1h\033=\033[?5h\033[?25l\033[?1034h\033[?2004h");
+	assert(winmode == (MODE_NUMLOCK | MODE_APPCURSOR | MODE_APPKEYPAD |
+	                   MODE_REVERSE | MODE_HIDE | MODE_8BIT | MODE_BRCKTPASTE));
+	put("\033c");
+	assert(winmode == MODE_NUMLOCK);
+	put("\033[?5h\033c");
+	assert(!(winmode & MODE_REVERSE));
 
 	reset(10, 8);
 	put(url);
