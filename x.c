@@ -4098,6 +4098,8 @@ kmap(KeySym k, uint state)
 			return NULL;
 	}
 
+	/* Caps Lock does not change what a function key sends. */
+	state &= ~LockMask;
 	for (kp = key; kp < key + LEN(key); kp++) {
 		if (kp->k != k)
 			continue;

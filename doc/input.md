@@ -15,7 +15,8 @@ precedence over terminal key mappings and text input. Unbound keys follow
 the normal input path, including Ctrl+Shift+C/V/Y, Ctrl+Shift+Num Lock,
 Break and Print Screen. A key sends input when it has a terminal mapping
 or produces text; Ctrl+Shift+C, for example, can send the same control byte
-as Ctrl+C.
+as Ctrl+C. Caps Lock does not change terminal key mappings: Ctrl+Delete
+and Shift+Left keep their modifiers with it on, as shortcuts already do.
 
 Ctrl+Alt+V starts [keyboard selection](selection.md#keyboard-selection) by
 default. Ctrl+V reaches programs unless keyboard selection is active, where

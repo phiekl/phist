@@ -4012,6 +4012,19 @@ testlongcommit(int fd)
 	puts("PASS: an input method commit longer than the lookup buffer is sent whole");
 }
 
+/* Caps Lock keeps the modifiers a function key reports. */
+static void
+testcapslockkeys(int fd)
+{
+	pressnow(XK_Delete, ControlMask | LockMask);
+	expect(fd, "\033[3;5~");
+	pressnow(XK_Left, ShiftMask | LockMask);
+	expect(fd, "\033[1;2D");
+	pressnow(XK_Left, LockMask);
+	expect(fd, "\033[D");
+	puts("PASS: Caps Lock keeps function key modifiers");
+}
+
 int
 main(void)
 {
@@ -4043,6 +4056,7 @@ main(void)
 	testendlessdrain();
 	testinputmethodlost();
 	testlongcommit(sockets[1]);
+	testcapslockkeys(sockets[1]);
 	testclipfailure();
 	testdialog(sockets[1]);
 	testpresentationfallback(sockets[1]);
