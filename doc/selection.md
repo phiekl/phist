@@ -64,6 +64,7 @@ child process; only the font size shortcuts still work.
 
 Move around the screen and the retained history; the view scrolls to follow.
 Counts such as `3w` work on motions and `3n` on search repeats, up to 99,999.
+A wide character is one step for `h` and `l`, so `2h` goes where `hh` does.
 
 | Keys | Moves to |
 |------|----------|

@@ -2009,7 +2009,11 @@ tvimkey(Rune u, int ctrl)
 
 	switch (u) {
 	case 'h':
-		vim.pos.x -= MIN(n, term.col);
+		/* Step over a wide glyph at once, as l and a single h do. */
+		for (i = MIN(n, term.col); i > 0 && vim.pos.x > 0; i--)
+			if (--vim.pos.x > 0 &&
+			    (viewline(vimy(vim.pos.row))[vim.pos.x].mode & ATTR_WDUMMY))
+				vim.pos.x--;
 		break;
 	case 'l':
 		for (i = MIN(n, term.col); i > 0 && vim.pos.x < term.col - 1; i--)

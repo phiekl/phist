@@ -330,6 +330,17 @@ testwrapped(void)
 	expectsel("a\344\270\255\346\226\207");
 	tvimend();
 	assert(sel.ob.x == -1);
+	/* A count takes as many steps as repeating the key. */
+	screen(10, 3, "a\344\270\255\346\226\207b");
+	keys("$2h");
+	expectat(0, 1);
+	keys("$hh");
+	expectat(0, 1);
+	keys("$3h");
+	expectat(0, 0);
+	keys("02l");
+	expectat(0, 3);
+	tvimend();
 }
 
 static void
