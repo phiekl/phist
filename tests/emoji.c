@@ -47,6 +47,7 @@ static int extreme, extremeascent, extremedescent;
 enum { UNCOVERED = 0x100000 }; /* no font has this character or later ones */
 enum { FALLBACKONLY = 0xF0000 }; /* the fallback found for it has these */
 static XftFont textfonts[4], fallbackfont, monofont;
+static int unstyled; /* fonts match without their requested style */
 static int available = 1, fixedsize, failopen, failafter, loads, livefonts, ascii_queries;
 
 /* Exercise the real glyph selector with deterministic font coverage/metrics. */
@@ -63,6 +64,13 @@ FcFontMatch(FcConfig *config, FcPattern *pattern, FcResult *result)
 
 	FcPatternDel(match, FC_COLOR);
 	FcPatternAddBool(match, FC_COLOR, available);
+	/* Lacking bold and italic styles, give the regular ones for them. */
+	if (unstyled) {
+		FcPatternDel(match, FC_WEIGHT);
+		FcPatternAddInteger(match, FC_WEIGHT, FC_WEIGHT_REGULAR);
+		FcPatternDel(match, FC_SLANT);
+		FcPatternAddInteger(match, FC_SLANT, FC_SLANT_ROMAN);
+	}
 	*result = FcResultMatch;
 	return match;
 }
@@ -440,6 +448,18 @@ main(void)
 	fixedsize = 0;
 	assert(!xloadfonts("Test:pixelsize=13", 0));
 	assert(win.cw == 8 && win.ch == 16 && usedfontsize == 13 && livefonts == 4);
+	xunloadfonts();
+
+	/* Reloaded fonts with the styles asked for lose earlier mismatches. */
+	unstyled = 1;
+	assert(!xloadfonts("Test:pixelsize=13", 0));
+	assert(dc.bfont.badweight && dc.ibfont.badweight && dc.ibfont.badslant &&
+	       dc.ifont.badslant);
+	xunloadfonts();
+	unstyled = 0;
+	assert(!xloadfonts("Test:pixelsize=13", 0));
+	assert(!dc.bfont.badweight && !dc.ibfont.badweight && !dc.ibfont.badslant &&
+	       !dc.ifont.badslant && !dc.font.badweight && !dc.font.badslant);
 	xunloadfonts();
 	win.cw = win.ch = 77;
 	metricwidth = 0;

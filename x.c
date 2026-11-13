@@ -2014,6 +2014,9 @@ xloadfont(Font *f, FcPattern *pattern)
 	XGlyphInfo extents;
 	int wantattr, haveattr;
 
+	/* What a font loaded here before lacked is no concern of this one. */
+	f->badslant = f->badweight = 0;
+
 	/*
 	 * Manually configure instead of calling XftMatchFont
 	 * so that we can use the configured pattern for

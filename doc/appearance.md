@@ -177,8 +177,14 @@ does not end the terminal. The character is drawn as U+FFFD from the primary
 font, or as its missing glyph, and loading is tried again the next time it is
 drawn.
 
+Bold or italic text whose font lacks that weight or slant is drawn in the
+`defaultattr` color instead, and a message goes to stderr. Each zoom or font
+load checks the new fonts afresh, so a matching replacement draws such text
+in its own colors again.
+
 `LC_ALL=C.UTF-8 sh tests/emoji.sh` checks the limit with a flood of uncovered
-characters and the replacement after each kind of failure.
+characters and the replacement after each kind of failure, and style
+mismatches after a reload.
 
 ## Visual bell
 
