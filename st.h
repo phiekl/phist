@@ -181,6 +181,7 @@ extern char *stty_args;
 extern char *vtiden;
 extern wchar_t *worddelimiters;
 extern const char *selectionpatterns[];
+extern const char *selectionunits[];
 extern int allowaltscreen;
 extern int allowwindowops;
 extern int allowcolorchanges;

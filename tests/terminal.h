@@ -14,6 +14,25 @@ const char *selectionpatterns[] = {
 	"^(.*)$",
 	NULL
 };
+#define SELHEX "[0-9A-Fa-f]{1,4}"
+#define SELV4OCTET "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
+#define SELV4 "(" SELV4OCTET "\\.){3}" SELV4OCTET
+#define SELLS32 "(" SELHEX ":" SELHEX "|" SELV4 ")"
+#define SELIPV6 "((" SELHEX ":){6}" SELLS32 "|::(" SELHEX ":){5}" SELLS32 "|" \
+	"(" SELHEX ")?::(" SELHEX ":){4}" SELLS32 "|" \
+	"((" SELHEX ":){0,1}" SELHEX ")?::(" SELHEX ":){3}" SELLS32 "|" \
+	"((" SELHEX ":){0,2}" SELHEX ")?::(" SELHEX ":){2}" SELLS32 "|" \
+	"((" SELHEX ":){0,3}" SELHEX ")?::" SELHEX ":" SELLS32 "|" \
+	"((" SELHEX ":){0,4}" SELHEX ")?::" SELLS32 "|" \
+	"((" SELHEX ":){0,5}" SELHEX ")?::" SELHEX "|" \
+	"((" SELHEX ":){0,6}" SELHEX ")?::)"
+#define SELMAC "[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}"
+#define SELTOKEN "[0-9A-Za-z:.]*[0-9A-Za-z:]"
+const char *selectionunits[] = {
+	"(" SELIPV6 "|" SELMAC ")|" SELTOKEN,
+	"(" SELIPV6 "/[0-9]{1,3})|" SELTOKEN "(/[0-9A-Za-z]+)?",
+	NULL
+};
 int allowaltscreen = 1, allowwindowops, allowcolorchanges;
 unsigned int tabspaces = 8, defaultfg = 7, defaultbg = 0, defaultcs = 7;
 unsigned int scrollback_lines = 64;

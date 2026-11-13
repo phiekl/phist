@@ -28,6 +28,21 @@ filename dots remain selected; sentence-ending periods are excluded.
 Ordinary word selection remains a candidate for Unicode and punctuation.
 Patterns compile at startup so errors appear before the shell starts.
 
+`selectionunits` are matched the same way, but other selections may not cut
+across them. Within a unit, only the smallest selection is offered before
+the unit itself. A pattern match that would cut across one is dropped, and
+word selection stops at its edge. Units are matched within blank-separated
+words, so they cannot span blanks. The defaults select IPv6 addresses as
+defined by RFC 3986, including every compressed form with embedded IPv4, and
+MAC addresses with colons. In
+`inet6 fe80::1/64 scope link`, successive clicks on `fe80`, `::` or `1`
+select that part, then `fe80::1`, then `fe80::1/64`, then the line. Clicking
+`64` selects `64`, then `fe80::1/64`; clicking `/` selects `/64` first. In
+`aa:bb:cc:dd:ee:ff`, clicking `bb` selects `bb`, then the whole address.
+Addresses must be valid and stand alone, so `std::vector`, times like
+`12:34:56`, nine IPv6 groups, seven MAC groups, prefixes over three digits
+and invalid dotted parts such as `::ffff:192.0.2.999` select as before.
+
 Soft-wrapped rows are matched as one logical line, even beyond the visible
 history viewport. UTF-8 matches map back to cells without losing wide
 characters or wrapped spaces, and equal candidates are deduplicated.

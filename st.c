@@ -379,6 +379,8 @@ static void vimvalidatesel(void);
 static void vimvalidate(void);
 static regex_t *selpatterns; /* compiled selectionpatterns */
 static int nselpatterns;
+static regex_t *selunits; /* compiled selectionunits */
+static int nselunits;
 
 static struct {
 	struct {
@@ -2607,12 +2609,31 @@ base64dec(const char *src)
 	return result;
 }
 
+/* Compile a NULL-terminated list of selection regexes, dying on errors. */
+static int
+selcompile(const char *const *sources, regex_t **compiled, const char *kind)
+{
+	char error[256];
+	int i, n, count;
+
+	for (count = 0; sources[count]; count++)
+		;
+	*compiled = xmalloc(MAX(1, count) * sizeof(**compiled));
+	for (i = 0; i < count; i++) {
+		n = regcomp(&(*compiled)[i], sources[i], REG_EXTENDED);
+		if (n) {
+			regerror(n, &(*compiled)[i], error, sizeof(error));
+			die("invalid selection %s %d: %s\n", kind, i, error);
+		}
+		if (!(*compiled)[i].re_nsub)
+			die("selection %s %d needs a capture group\n", kind, i);
+	}
+	return count;
+}
+
 void
 selinit(void)
 {
-	char error[256];
-	int i, n;
-
 	sel.mode = SEL_IDLE;
 	sel.snap = 0;
 	sel.ob.x = -1;
@@ -2620,18 +2641,8 @@ selinit(void)
 	/* Report configuration errors at startup rather than on a later click. */
 	if (selpatterns)
 		return;
-	for (nselpatterns = 0; selectionpatterns[nselpatterns]; nselpatterns++)
-		;
-	selpatterns = xmalloc(MAX(1, nselpatterns) * sizeof(*selpatterns));
-	for (i = 0; i < nselpatterns; i++) {
-		n = regcomp(&selpatterns[i], selectionpatterns[i], REG_EXTENDED);
-		if (n) {
-			regerror(n, &selpatterns[i], error, sizeof(error));
-			die("invalid selection pattern %d: %s\n", i, error);
-		}
-		if (!selpatterns[i].re_nsub)
-			die("selection pattern %d needs a capture group\n", i);
-	}
+	nselpatterns = selcompile(selectionpatterns, &selpatterns, "pattern");
+	nselunits = selcompile(selectionunits, &selunits, "unit");
 }
 
 static int
@@ -2766,6 +2777,177 @@ selmatchcmp(const void *a, const void *b)
 	return (ma->first > mb->first) - (ma->first < mb->first);
 }
 
+/* Whether two matches overlap without either containing the other. */
+static int
+selcrosses(SelMatch a, SelMatch b)
+{
+	return (a.first < b.first && b.first <= a.last && a.last < b.last) ||
+	       (b.first < a.first && a.first <= b.last && b.last < a.last);
+}
+
+/*
+ * Keep selections from cutting across a unit's match: drop the first
+ * npatterns pattern matches that would, and end the word selection, the
+ * first match, at its edge. One around the click is a candidate itself.
+ */
+static void
+selunit(SelMatch *matches, int *count, int *npatterns, SelMatch unit,
+        int point, int around)
+{
+	SelMatch *word = &matches[0];
+	int i;
+
+	if (selcrosses(*word, unit)) {
+		if (around) {
+			word->first = MAX(word->first, unit.first);
+			word->last = MIN(word->last, unit.last);
+		} else if (unit.last < point) {
+			word->first = unit.last + 1;
+		} else {
+			word->last = unit.first - 1;
+		}
+	}
+	for (i = 1; i < *npatterns; ) {
+		if (selcrosses(matches[i], unit)) {
+			memmove(&matches[i], &matches[i + 1],
+			        (*count - i - 1) * sizeof(*matches));
+			(*count)--;
+			(*npatterns)--;
+		} else {
+			i++;
+		}
+	}
+	if (around)
+		matches[(*count)++] = unit;
+}
+
+/* Whether a lies within b. */
+static int
+selwithin(SelMatch a, SelMatch b)
+{
+	return b.first <= a.first && a.last <= b.last;
+}
+
+/*
+ * Of the first npatterns matches, keep only the smallest within the
+ * smallest unit around the click, so that the next click selects the unit
+ * rather than a larger part of it, such as "bb:" of a MAC address.
+ */
+static void
+selunitparts(SelMatch *matches, int *count, int npatterns)
+{
+	SelMatch unit;
+	int i, keep = -1;
+
+	if (npatterns >= *count)
+		return;
+	unit = matches[npatterns];
+	for (i = npatterns + 1; i < *count; i++)
+		if (matches[i].last - matches[i].first < unit.last - unit.first)
+			unit = matches[i];
+	for (i = 0; i < npatterns; i++)
+		if (selwithin(matches[i], unit) && (keep < 0 ||
+		    selmatchcmp(&matches[i], &matches[keep]) < 0))
+			keep = i;
+	for (i = npatterns - 1; i >= 0; i--) {
+		if (i != keep && selwithin(matches[i], unit)) {
+			memmove(&matches[i], &matches[i + 1],
+			        (*count - i - 1) * sizeof(*matches));
+			(*count)--;
+		}
+	}
+}
+
+/*
+ * Match text from offset to end, giving the match and capture as offsets in
+ * text. Text ends there only if end is its length.
+ */
+static int
+selexec(const regex_t *re, char *text, size_t length, size_t offset,
+        size_t end, regmatch_t match[2])
+{
+	int flags = (offset ? REG_NOTBOL : 0) | (end < length ? REG_NOTEOL : 0);
+#ifdef REG_STARTEND
+	/* Avoid regexec() measuring the remaining text on every call. */
+	match[0].rm_so = offset;
+	match[0].rm_eo = end;
+	return !regexec(re, text, 2, match, REG_STARTEND | flags);
+#else
+	char saved = text[end];
+	int i, found;
+
+	text[end] = '\0';
+	found = !regexec(re, text + offset, 2, match, flags);
+	text[end] = saved;
+	for (i = 0; found && i < 2; i++) {
+		if (match[i].rm_so >= 0) {
+			match[i].rm_so += offset;
+			match[i].rm_eo += offset;
+		}
+	}
+	return found;
+#endif
+}
+
+/* The first byte of text at or after a cell, or length if none is. */
+static size_t
+selbyte(const int *cells, size_t length, int cell)
+{
+	size_t low = 0, high = length, mid;
+
+	while (low < high) {
+		mid = low + (high - low) / 2;
+		if (cells[mid] < cell)
+			low = mid + 1;
+		else
+			high = mid;
+	}
+	return low;
+}
+
+/* The cells from byte begin up to end, including a final wide glyph's dummy. */
+static SelMatch
+selcells(const int *cells, int first, size_t begin, size_t end)
+{
+	int last = cells[end - 1];
+
+	if (renderline(first + last / term.col)[last % term.col].mode & ATTR_WIDE)
+		last++;
+	return (SelMatch){ cells[begin], last };
+}
+
+/*
+ * Apply the units' matches in text from begin to end, a blank-separated
+ * word. Return whether one around the click runs into a cut end.
+ */
+static int
+selunitsin(SelMatch *matches, int *count, int *npatterns, char *text,
+           const int *cells, size_t length, size_t begin, size_t end,
+           size_t point, int first, int cuthead, int cuttail)
+{
+	regmatch_t match[2];
+	size_t offset, b, e;
+	int i, around;
+
+	for (i = 0; i < nselunits; i++) {
+		for (offset = begin; offset < end;
+		     offset = MAX(offset + 1, (size_t)match[0].rm_eo)) {
+			if (!selexec(&selunits[i], text, length, offset, end, match))
+				break;
+			if (match[1].rm_so < 0 || match[1].rm_eo <= match[1].rm_so)
+				continue;
+			b = match[1].rm_so;
+			e = match[1].rm_eo;
+			around = b <= point && point < e;
+			if (around && ((cuthead && b == 0) || (cuttail && e == length)))
+				return 1;
+			selunit(matches, count, npatterns, selcells(cells, first, b, e),
+			        cells[point], around);
+		}
+	}
+	return 0;
+}
+
 /* Row of a cell index counted from the first row, rounding down if negative. */
 static int
 selrowof(int n)
@@ -2781,15 +2963,16 @@ selrowof(int n)
 static void
 selregex(int *x, int *y, int direction)
 {
-	SelMatch *matches;
+	SelMatch *matches, *words;
 	regmatch_t match[2];
 	Line line;
 	char *text;
 	int *cells;
 	int first = *y, last = *y, row, col, width, n, i, count = 0;
+	int npatterns, nseen = 0;
 	int snap = sel.snap, bx = *x, by = *y, ex = *x, ey = *y;
 	int context = (SELCONTEXT + term.col - 1) / term.col, cuthead, cuttail, cut = 0;
-	size_t capacity, length = 0, point = SIZE_MAX, offset, begin, end;
+	size_t capacity, length = 0, point = SIZE_MAX, offset, begin, end, *seen;
 	char utf8[UTF_SIZ];
 
 	while (first > *y - context && (line = viewline(first - 1)) &&
@@ -2827,7 +3010,7 @@ selregex(int *x, int *y, int direction)
 	text[length] = '\0';
 
 	/* Keep phist's word selection as a candidate, including punctuation/Unicode. */
-	matches = xmalloc((nselpatterns + 2) * sizeof(*matches));
+	matches = xmalloc((nselpatterns + nselunits + 2) * sizeof(*matches));
 	sel.snap = SNAP_WORD;
 	selsnap(&bx, &by, -1);
 	selsnap(&ex, &ey, +1);
@@ -2835,45 +3018,58 @@ selregex(int *x, int *y, int direction)
 	matches[count++] = (SelMatch){ (by - first) * term.col + bx,
 	                              (ey - first) * term.col + ex };
 	for (i = 0; i < nselpatterns && point != SIZE_MAX; i++) {
-		for (offset = 0; offset <= length; ) {
-#ifdef REG_STARTEND
-			/* Avoid regexec() measuring the remaining text on every call. */
-			match[0].rm_so = offset;
-			match[0].rm_eo = length;
-			if (regexec(&selpatterns[i], text, 2, match,
-			            REG_STARTEND | (offset ? REG_NOTBOL : 0)))
+		for (offset = 0; offset <= length;
+		     offset = MAX(offset + 1, (size_t)match[0].rm_eo)) {
+			if (!selexec(&selpatterns[i], text, length, offset, length, match))
 				break;
-			match[0].rm_so -= offset;
-			match[0].rm_eo -= offset;
-			match[1].rm_so -= match[1].rm_so >= 0 ? offset : 0;
-			match[1].rm_eo -= match[1].rm_eo >= 0 ? offset : 0;
-#else
-			if (regexec(&selpatterns[i], text + offset, 2, match,
-			            offset ? REG_NOTBOL : 0))
-				break;
-#endif
 			if (match[1].rm_so >= 0 && match[1].rm_eo > match[1].rm_so) {
-				begin = offset + match[1].rm_so;
-				end = offset + match[1].rm_eo;
+				begin = match[1].rm_so;
+				end = match[1].rm_eo;
 				if (begin <= point && point < end) {
 					if ((cuthead && begin == 0) || (cuttail && end == length)) {
 						cut = 1;
 						break;
 					}
-					bx = cells[begin];
-					ex = cells[end - 1];
-					line = renderline(first + ex / term.col);
-					if (line[ex % term.col].mode & ATTR_WIDE)
-						ex++;
-					matches[count++] = (SelMatch){ bx, ex };
+					matches[count++] = selcells(cells, first, begin, end);
 					break;
 				}
 			}
-			if (offset + match[0].rm_so > point)
+			if ((size_t)match[0].rm_so > point)
 				break;
-			offset += MAX(1, match[0].rm_eo);
 		}
 	}
+	npatterns = count;
+	words = xmalloc(npatterns * sizeof(*words));
+	memcpy(words, matches, npatterns * sizeof(*words));
+	seen = xmalloc((2 * npatterns + 1) * sizeof(*seen));
+	/*
+	 * A unit matters only around the click or across an end of another
+	 * match, so match units in the blank-separated words there.
+	 */
+	for (n = 0; n < 2 * npatterns + 1 && point != SIZE_MAX && nselunits; n++) {
+		if (!n)
+			offset = point;
+		else if (n % 2)
+			offset = selbyte(cells, length, words[(n - 1) / 2].first);
+		else
+			offset = selbyte(cells, length, words[(n - 1) / 2].last);
+		if (offset >= length || text[offset] == ' ')
+			continue;
+		for (begin = offset; begin > 0 && text[begin - 1] != ' '; begin--)
+			;
+		for (end = offset; end < length && text[end] != ' '; end++)
+			;
+		for (i = 0; i < nseen && seen[i] != begin; i++)
+			;
+		if (i < nseen)
+			continue;
+		seen[nseen++] = begin;
+		cut |= selunitsin(matches, &count, &npatterns, text, cells, length,
+		                  begin, end, point, first, cuthead, cuttail);
+	}
+	free(seen);
+	free(words);
+	selunitparts(matches, &count, npatterns);
 	/* A match running past the examined text grows to the whole line. */
 	if (cut) {
 		bx = ex = *x;

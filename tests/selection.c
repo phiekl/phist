@@ -222,6 +222,87 @@ main(void)
 	expect(5, 0, 0, "!!!");
 	expect(10, 0, 100, "... !!!\n");
 
+	/* A part of an IPv6 or MAC address, then all of it, then with an IPv6
+	 * prefix length, whichever part is clicked; the prefix length alone,
+	 * then the address with it. */
+	reset(80, 5);
+	put("inet6 fe80::1/64 scope link");
+	expect(6, 0, 0, "fe80");
+	expect(6, 0, 1, "fe80::1");
+	expect(6, 0, 2, "fe80::1/64");
+	expect(6, 0, 3, "inet6 fe80::1/64 scope link");
+	expect(10, 0, 0, "::");
+	expect(10, 0, 1, "fe80::1");
+	expect(12, 0, 0, "1");
+	expect(12, 0, 1, "fe80::1");
+	expect(12, 0, 2, "fe80::1/64");
+	expect(13, 0, 0, "/64");
+	expect(13, 0, 1, "fe80::1/64");
+	expect(14, 0, 0, "64");
+	expect(14, 0, 1, "fe80::1/64");
+	expect(14, 0, 2, "inet6 fe80::1/64 scope link");
+	expect(17, 0, 0, "scope");
+	expect(17, 0, 1, "inet6 fe80::1/64 scope link");
+	reset(80, 5);
+	put("ether aa:bb:cc:dd:ee:ff brd ff:ff:ff:ff:ff:ff");
+	expect(9, 0, 0, "bb");
+	expect(9, 0, 1, "aa:bb:cc:dd:ee:ff");
+	expect(9, 0, 2, "ether aa:bb:cc:dd:ee:ff brd ff:ff:ff:ff:ff:ff");
+	expect(8, 0, 0, ":");
+	expect(8, 0, 1, "aa:bb:cc:dd:ee:ff");
+	expect(43, 0, 1, "ff:ff:ff:ff:ff:ff");
+	reset(80, 5);
+	put("route 2001:DB8::/32 via [2001:db8::1]:443, ::ffff:192.0.2.1.");
+	expect(11, 0, 0, "DB8");
+	expect(11, 0, 1, "2001:DB8::");
+	expect(11, 0, 2, "2001:DB8::/32");
+	expect(17, 0, 0, "32");
+	expect(17, 0, 1, "2001:DB8::/32");
+	expect(30, 0, 0, "db8");
+	expect(30, 0, 1, "2001:db8::1");
+	expect(51, 0, 0, "192.0.2.1");
+	expect(51, 0, 1, "::ffff:192.0.2.1");
+
+	/* Embedded IPv4 addresses in every compressed form are whole. */
+	reset(80, 5);
+	put("2001:db8::abcd:192.0.2.1 1::2:3:4:5:0.0.0.0 ::1:2:3:4:5:1.2.3.4");
+	expect(0, 0, 1, "2001:db8::abcd:192.0.2.1");
+	expect(16, 0, 0, "192.0.2.1");
+	expect(16, 0, 1, "2001:db8::abcd:192.0.2.1");
+	expect(25, 0, 1, "1::2:3:4:5:0.0.0.0");
+	expect(44, 0, 1, "::1:2:3:4:5:1.2.3.4");
+	/* Invalid dotted suffixes leave no address, but a final period does. */
+	reset(80, 5);
+	put("::ffff:192.0.2.999 ::ffff:192.0.2.1extra ::ffff:1.2.3.4.");
+	expect(2, 0, 1, "ffff:");
+	expect(21, 0, 1, "ffff:");
+	expect(43, 0, 1, "::ffff:1.2.3.4");
+
+	/* Wrapped addresses are found across rows. */
+	reset(10, 5);
+	put("ab fe80::1/64 x");
+	expect(3, 0, 1, "fe80::1");
+	expect(3, 0, 2, "fe80::1/64");
+	expect(1, 1, 0, "64");
+	expect(1, 1, 1, "fe80::1/64");
+
+	/* Addresses stand alone, not within words, and must be valid: these
+	 * select as they would without address units. */
+	reset(80, 5);
+	put("std::vector deadbeefcafe::1 fe80::1zz 1:2:3:4:5:6:7:8:9 12:34:56");
+	expect(2, 0, 1, "std:");
+	expect(12, 0, 1, "vector deadbeefcafe:");
+	expect(28, 0, 1, "1 fe80:");
+	expect(38, 0, 1, "1zz 1:");
+	expect(56, 0, 1, "9 12:");
+	/* Seven groups are no MAC address, and too long a prefix no prefix. */
+	reset(80, 5);
+	put("aa:bb:cc:dd:ee:ff:00 fe80::1/1280");
+	expect(0, 0, 1, "aa:");
+	expect(24, 0, 1, "fe80::1");
+	expect(24, 0, 2, "aa:bb:cc:dd:ee:ff:00 fe80::1/1280");
+	expect(30, 0, 1, "/1280");
+
 	/* Dragging expands by the same match size in either direction. */
 	reset(80, 5);
 	put("'alpha' 'beta' 'gamma'");

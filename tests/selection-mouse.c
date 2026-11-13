@@ -21,7 +21,7 @@ main(void)
 	assert(clicksnap(4, 2, 0, now) == SNAP_REGEX + 3);
 	for (i = 0; i < 100; i++)
 		clicksnap(4, 2, 0, now);
-	assert(xsel.clicks <= (int)LEN(selectionpatterns) + 2);
+	assert(xsel.clicks <= (int)(LEN(selectionpatterns) + LEN(selectionunits)) + 1);
 
 	/* Different cells, modifiers or elapsed time start a fresh selection. */
 	assert(clicksnap(5, 2, 0, now) == 0);

@@ -1310,7 +1310,8 @@ static int
 clicksnap(int col, int row, uint state, struct timespec now)
 {
 	if (clickcontinues(col, row, state, now))
-		xsel.clicks = MIN(xsel.clicks + 1, (int)LEN(selectionpatterns) + 2);
+		xsel.clicks = MIN(xsel.clicks + 1,
+		                  (int)(LEN(selectionpatterns) + LEN(selectionunits)) + 1);
 	else
 		xsel.clicks = 1;
 	xsel.clickcol = col;

@@ -65,6 +65,37 @@ const char *selectionpatterns[] = {
 	NULL
 };
 
+/*
+ * Selections that other matches may not cut across, also offered like
+ * selectionpatterns: other patterns' matches that would are dropped, and word
+ * selection ends at their edges. Defaults select IPv6 and colon-separated MAC
+ * addresses, then IPv6 ones with a prefix length, so "fe80::1/64" offers
+ * "fe80::1" and "fe80::1/64", but not "1/64". IPv6 follows RFC 3986,
+ * including embedded IPv4. An alternative outside the capture consumes a
+ * whole run of letters, digits, colons and inner dots, so addresses are
+ * found only on their own, not within words such as "std::vector" or in
+ * "::ffff:192.0.2.999".
+ */
+#define SELHEX "[0-9A-Fa-f]{1,4}"
+#define SELV4OCTET "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
+#define SELV4 "(" SELV4OCTET "\\.){3}" SELV4OCTET
+#define SELLS32 "(" SELHEX ":" SELHEX "|" SELV4 ")"
+#define SELIPV6 "((" SELHEX ":){6}" SELLS32 "|::(" SELHEX ":){5}" SELLS32 "|" \
+	"(" SELHEX ")?::(" SELHEX ":){4}" SELLS32 "|" \
+	"((" SELHEX ":){0,1}" SELHEX ")?::(" SELHEX ":){3}" SELLS32 "|" \
+	"((" SELHEX ":){0,2}" SELHEX ")?::(" SELHEX ":){2}" SELLS32 "|" \
+	"((" SELHEX ":){0,3}" SELHEX ")?::" SELHEX ":" SELLS32 "|" \
+	"((" SELHEX ":){0,4}" SELHEX ")?::" SELLS32 "|" \
+	"((" SELHEX ":){0,5}" SELHEX ")?::" SELHEX "|" \
+	"((" SELHEX ":){0,6}" SELHEX ")?::)"
+#define SELMAC "[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}"
+#define SELTOKEN "[0-9A-Za-z:.]*[0-9A-Za-z:]"
+const char *selectionunits[] = {
+	"(" SELIPV6 "|" SELMAC ")|" SELTOKEN,
+	"(" SELIPV6 "/[0-9]{1,3})|" SELTOKEN "(/[0-9A-Za-z]+)?",
+	NULL
+};
+
 /* selection timeouts (in milliseconds) */
 static unsigned int doubleclicktimeout = 300;
 static unsigned int tripleclicktimeout = 600;
