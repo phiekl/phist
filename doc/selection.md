@@ -37,7 +37,9 @@ without rerunning the regexes. If scrolling changes selected text or drops
 selected rows across a margin, the selection is cleared. Inserting or
 deleting characters (ICH, DCH or typing in insert mode) on a row ends a
 selection on the cells they move, as the same columns would then select
-other text; one before them stays. Selections otherwise follow their text
+other text; one before them stays. Writing, erasing or deleting half of a
+wide glyph blanks its other half, which ends a selection holding that half
+even outside the cells written. Selections otherwise follow their text
 through history, screen switches and typing; resizing ends them because
 text can reflow between rows.
 

@@ -4069,20 +4069,6 @@ tsetchar(Rune u, const Glyph *attr, int x, int y)
 	   BETWEEN(u, 0x41, 0x7e) && vt100_0[u - 0x41])
 		utf8decode(vt100_0[u - 0x41], &u, UTF_SIZ);
 
-	if (term.line[y][x].mode & ATTR_WIDE) {
-		if (x+1 < term.col) {
-			term.line[y][x+1].u = ' ';
-			term.line[y][x+1].mode &= ~ATTR_WDUMMY;
-			linkset(&term.line[y][x+1], 0);
-		}
-	} else if (term.line[y][x].mode & ATTR_WDUMMY) {
-		if (x > 0) {
-			term.line[y][x-1].u = ' ';
-			term.line[y][x-1].mode &= ~ATTR_WIDE;
-			linkset(&term.line[y][x-1], 0);
-		}
-	}
-
 	tdirtyscreen(y, y);
 	linkref(attr->link, 1);
 	linkref(term.line[y][x].link, -1);
@@ -4091,6 +4077,10 @@ tsetchar(Rune u, const Glyph *attr, int x, int y)
 	if (attr == &term.c.attr)
 		term.c.attr.mode &= ~ATTR_LINKSTART;
 	urls.dirty = 1;
+	/* Blank the other half of a wide glyph this overwrote, ending a
+	 * selection that held it. */
+	tfixwide(y, x);
+	tfixwide(y, x + 1);
 }
 
 void
@@ -6222,14 +6212,11 @@ check_control_code:
 	if (width == 2) {
 		gp->mode |= ATTR_WIDE;
 		if (term.c.x+1 < term.col) {
-			if ((gp[1].mode & ATTR_WIDE) && term.c.x+2 < term.col) {
-				gp[2].u = ' ';
-				gp[2].mode &= ~ATTR_WDUMMY;
-				linkset(&gp[2], 0);
-			}
 			gp[1].u = '\0';
 			gp[1].mode = ATTR_WDUMMY;
 			linkset(&gp[1], gp->link);
+			/* The dummy cell of a wide glyph this covered half of. */
+			tfixwide(term.c.y, term.c.x + 2);
 		}
 	}
 	if (inserted) {

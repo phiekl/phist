@@ -198,6 +198,24 @@ main(void)
 		assert(sel.ob.x != -1);
 		put("\r\033[2C\033[X");
 		assert(line[1].u == ' ' && sel.ob.x == -1);
+		/* So does overwriting its other half with text. */
+		put("\033[H\033[2JA" WIDE "B");
+		selstart(1, 0, 0);
+		selextend(1, 0, SEL_REGULAR, 0);
+		selextend(1, 0, SEL_REGULAR, 1);
+		assert(sel.ob.x != -1);
+		put("\r\033[2CX");
+		assert(line[1].u == ' ' && line[2].u == 'X' && sel.ob.x == -1);
+		/* And covering half of a wide glyph with another wide glyph. */
+		put("\033[H\033[2JA" WIDE WIDE "B");
+		selstart(4, 0, 0);
+		selextend(5, 0, SEL_REGULAR, 0);
+		selextend(5, 0, SEL_REGULAR, 1);
+		assert(sel.ob.x != -1);
+		put("\r\033[2C" WIDE);
+		assert((line[2].mode & ATTR_WIDE) && (line[3].mode & ATTR_WDUMMY));
+		assert(line[4].u == ' ' && !(line[4].mode & ATTR_WDUMMY));
+		assert(line[5].u == 'B' && sel.ob.x == -1);
 		puts("PASS: character edits keep wide glyphs whole");
 	}
 
