@@ -427,6 +427,49 @@ main(int argc, char **argv)
 	assert(!(term.c.state & CURSOR_WRAPNEXT));
 	assert(!(term.saved[1].state & CURSOR_WRAPNEXT));
 
+	if (wcwidth(0x4E2D) == 2) {
+		/* Narrowing an alternate screen blanks a wide glyph cut at
+		 * the new margin. */
+		reset(10, 4);
+		put("main\033[?1049h\033[H12345678\344\270\255");
+		assert(term.line[0][8].mode & ATTR_WIDE);
+		tresize(9, 4);
+		wide_pairs(term.line[0]);
+		line_is(term.line[0], "12345678");
+
+		/* Widening a one-column alternate screen restores the dummy
+		 * cell of a wide glyph clipped there. */
+		reset(1, 4);
+		put("\033[?1049h\033[H\344\270\255");
+		assert(term.line[0][0].mode & ATTR_WIDE);
+		tresize(5, 4);
+		wide_pairs(term.line[0]);
+		assert(term.line[0][0].u == 0x4E2D && term.line[0][1].mode == ATTR_WDUMMY);
+		put("\033[1;3HX");
+		tvimstart();
+		tvimkey('0', 0);
+		tvimkey('l', 0);
+		assert(vim.pos.x == 2);
+		tvimkey('h', 0);
+		assert(vim.pos.x == 0);
+		tvimend();
+
+		/* Widening one turns padding before a wrapped wide glyph into
+		 * a space that is copied. */
+		reset(10, 4);
+		put("main\033[?1049h\033[H123456789\344\270\255");
+		assert(term.line[0][9].mode & ATTR_WPAD);
+		tresize(20, 4);
+		assert(!(term.line[0][9].mode & (ATTR_WPAD | ATTR_WRAP)));
+		put("\033[1;11HZ");
+		selstart(0, 0, 0);
+		selextend(10, 0, SEL_REGULAR, 0);
+		selextend(10, 0, SEL_REGULAR, 1);
+		copied = getsel();
+		assert(copied && !strcmp(copied, "123456789 Z"));
+		free(copied);
+	}
+
 	printf("PASS: resize preserves full history and screen with capacity %d\n", cap);
 	return 0;
 }

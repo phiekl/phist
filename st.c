@@ -6281,6 +6281,7 @@ void
 tresize(int col, int row)
 {
 	int i, j;
+	Glyph *gp;
 	int min_limit;
 	int minrow = MIN(row, term.row);
 	int old_row = term.row;
@@ -6404,9 +6405,27 @@ tresize(int col, int row)
 			if (BETWEEN(i - altshift, 0, row - 1)) {
 				memcpy(term.alt[i - altshift], oldalt[i],
 				       MIN(col, old_col) * sizeof(Glyph));
+				gp = &term.alt[i - altshift][MIN(col, old_col) - 1];
 				linkcells(term.alt[i - altshift], MIN(col, old_col), 1);
+				/* The old margin's wrap, and padding before a wide glyph
+				 * on the next row, end there; its cells are now text. */
 				if (col > old_col)
-					term.alt[i - altshift][old_col - 1].mode &= ~ATTR_WRAP;
+					gp->mode &= ~(ATTR_WRAP | ATTR_WPAD);
+				/* A wide glyph clipped by a one-column screen gets its
+				 * dummy cell back, as reflow gives it. */
+				if (col > old_col && (gp->mode & ATTR_WIDE)) {
+					gp[1] = *gp;
+					gp[1].u = 0;
+					gp[1].mode = ATTR_WDUMMY;
+					gp[1].link = 0;
+					linkset(&gp[1], gp->link);
+				}
+				/* A wide glyph that lost its dummy cell to the new margin. */
+				if (col < old_col && (gp->mode & ATTR_WIDE)) {
+					gp->u = ' ';
+					gp->mode &= ~(ATTR_WIDE | ATTR_ALTPRES);
+					linkset(gp, 0);
+				}
 			}
 			linkcells(oldalt[i], old_col, -1);
 			free(oldalt[i]);

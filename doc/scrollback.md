@@ -122,7 +122,10 @@ the active cursor.
 
 The alternate screen keeps its contents across resizes and drops top rows
 only as needed to keep the cursor visible. Its copied rows do not retain
-stale wrap flags. Modes 47 and 1047 share the active cursor; 1049 alone
+stale wrap flags, nor padding flags before a wrapped wide glyph, so that
+cell is copied as a space after widening. Narrowing blanks a wide glyph
+whose dummy cell falls past the new margin, and widening a one-column
+screen gives a wide glyph clipped there its dummy cell back. Modes 47 and 1047 share the active cursor; 1049 alone
 saves and restores it. While the alternate screen is active, the main-screen
 cursor is tracked separately from the DECSC saved cursor.
 
