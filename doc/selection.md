@@ -9,6 +9,9 @@ smallest word or configured match under the pointer; further clicks at the
 same cell grow through distinct matches from shortest to longest, up to the
 complete logical line. A click that cannot grow the selection starts the
 sequence over immediately. Hold Shift when selecting on a clickable URL.
+Hold Alt while dragging to select a block. The modifiers held at release
+decide what is copied: letting go of Alt first copies the text running from
+the start to the end of the drag, not the block's columns.
 
 The initial pair uses `doubleclicktimeout` (300 ms); later clicks use
 `tripleclicktimeout` (600 ms). Moving to a different cell, changing

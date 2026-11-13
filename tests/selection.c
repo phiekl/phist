@@ -444,6 +444,21 @@ main(void)
 		}
 	}
 
+	/* Releasing Alt before the button ends a block drag as lines, with
+	 * the bounds of lines rather than of the block. */
+	reset(80, 5);
+	put("abcd\r\nefgh");
+	selstart(2, 0, 0);
+	selextend(1, 1, SEL_RECTANGULAR, 0);
+	expectcurrent("bc\nfg");
+	selextend(1, 1, SEL_REGULAR, 1);
+	expectcurrent("cd\nef");
+	/* And the other way round. */
+	selstart(2, 0, 0);
+	selextend(1, 1, SEL_REGULAR, 0);
+	selextend(1, 1, SEL_RECTANGULAR, 1);
+	expectcurrent("bc\nfg");
+
 	puts("PASS: regex selection expansion, paths, assignments, phrases, UTF-8, wrapping, history, dragging, alternate screen, reflow, long lines, coordinates off the screen");
 	return 0;
 }
