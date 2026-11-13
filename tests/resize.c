@@ -139,6 +139,14 @@ main(int argc, char **argv)
 		assert(term.line[0][4].u == 0x754C && term.line[0][5].mode == ATTR_WDUMMY);
 		assert(term.line[0][6].u == 'X' && term.c.y == 0 && term.c.x == 7);
 
+		/* Output into one column puts each wide glyph on its own row
+		 * too, with no blank rows between them. */
+		reset(1, 8);
+		put("\347\225\214\347\225\214X");
+		assert(term.line[0][0].u == 0x754C && term.line[0][0].mode & ATTR_WIDE);
+		assert(term.line[1][0].u == 0x754C && term.line[1][0].mode & ATTR_WIDE);
+		assert(term.line[2][0].u == 'X' && term.c.y == 2);
+
 		/* Both cursors follow a wide glyph moved past the padding cell. */
 		reset(10, 8);
 		put("abcd\347\225\214X\033[1;5H\0337");

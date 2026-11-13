@@ -6191,16 +6191,16 @@ check_control_code:
 		inserted = 1;
 	}
 
-	if (term.c.x+width > term.col) {
+	/* A row too narrow for the glyph at all clips it where it is, as
+	 * reflow does: a new row would not be any wider. */
+	if (term.c.x+width > term.col && term.c.x > 0) {
 		if (IS_SET(MODE_WRAP)) {
 			/* Skip an unused cell, but preserve text already at the margin. */
-			if (term.c.x > 0) {
-				gp = &term.line[term.c.y][term.col - 1];
-				if (sb_ispadding(gp))
-					gp->mode |= ATTR_WPAD;
-				gp->mode |= ATTR_WRAP;
-				tdirtyscreen(term.c.y, term.c.y);
-			}
+			gp = &term.line[term.c.y][term.col - 1];
+			if (sb_ispadding(gp))
+				gp->mode |= ATTR_WPAD;
+			gp->mode |= ATTR_WRAP;
+			tdirtyscreen(term.c.y, term.c.y);
 			tnewline(1);
 		} else {
 			tmoveto(term.col - width, term.c.y);

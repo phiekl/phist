@@ -140,7 +140,8 @@ evicted, when text scrolls away with history disabled, or on resize, because
 reflow can move text between rows.
 
 Wide characters stay with their spacing cells, even through a one-column
-window. Unused margin cells are marked as padding and omitted from copying,
+window. There each is clipped to its own row, by output as by reflow,
+without a blank row before it. Unused margin cells are marked as padding and omitted from copying,
 printing and later reflow. Wide-character output wraps are soft breaks and
 preserve text at the margin.
 
