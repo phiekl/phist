@@ -93,7 +93,9 @@ printf '\033[0i'
 ```
 
 The launching terminal receives neither raw output nor a screen dump. With
-`phist -o FILE`, Media Copy still writes to `FILE`. See `phist(1)` and run
+`phist -o FILE`, Media Copy still writes to `FILE`. An existing regular
+`FILE` is truncated when phist starts, so a shorter session doesn't leave
+the end of an earlier one behind it. See `phist(1)` and run
 `LC_ALL=C.UTF-8 sh tests/printing.sh` for printing regressions.
 
 If `FILE` is a pipe whose reader goes away, or a file reaching `ulimit -f`,

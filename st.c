@@ -5559,7 +5559,7 @@ printopen(const char *out)
 
 	if (!strcmp(out, "-")) {
 		iofd = STDOUT_FILENO;
-	} else if ((iofd = open(out, O_WRONLY | O_CREAT | O_NONBLOCK, 0666)) >= 0) {
+	} else if ((iofd = open(out, O_WRONLY | O_CREAT | O_TRUNC | O_NONBLOCK, 0666)) >= 0) {
 		fcntl(iofd, F_SETFL, fcntl(iofd, F_GETFL) & ~O_NONBLOCK);
 	} else {
 		err = errno;

@@ -491,11 +491,21 @@ testfifo(void)
 		close(sock);
 		unlink(addr.sun_path);
 
+		/* A new session replaces what an earlier one left in the file. */
 		snprintf(other, sizeof(other), "%s/file", dir);
+		fd = open(other, O_WRONLY | O_CREAT, 0600);
+		assert(fd >= 0 && write(fd, "previous session", 16) == 16);
+		close(fd);
 		printopen(other);
 		assert(!fstat(iofd, &st) && S_ISREG(st.st_mode));
 		assert(!(fcntl(iofd, F_GETFL) & O_NONBLOCK));
+		tprinter("new", 3);
+		ttyflushprint();
 		printstop();
+		fd = open(other, O_RDONLY);
+		assert(fd >= 0 && read(fd, text, sizeof(text)) == 3);
+		assert(!memcmp(text, "new", 3));
+		close(fd);
 		unlink(other);
 		_exit(7);
 	}
