@@ -3138,6 +3138,8 @@ testhyperlinkbox(int fd)
 	assert(!urlbox.text && owned == before);
 	clickat(1, 0);
 	assert(urlbox.text && !strcmp(urlbox.text, target));
+	/* Too late for a double click, so it only dismisses the bar. */
+	xsel.tclick1.tv_sec -= 1;
 	clickat(1, 0);
 	assert(!urlbox.text && owned == before);
 	clickat(1, 0);
@@ -3195,6 +3197,83 @@ testhyperlinkbox(int fd)
 	press(XK_Escape, 0);
 	expect(fd, NULL);
 
+	/* Clicking again at the label closes the bar and selects as usual,
+	 * without reopening it; later clicks reveal the target again. */
+	xsel.tclick1.tv_sec -= 1;
+	clickat(1, 0);
+	assert(urlbox.text && !strcmp(urlbox.text, target));
+	before = owned;
+	clickat(1, 0);
+	assert(!urlbox.text && owned > before && !strcmp(xsel.primary, "Project"));
+	expect(fd, NULL);
+	/* That is the largest selection, so the next click starts over and
+	 * reveals the target again, and the one after selects again. */
+	clickat(1, 0);
+	assert(urlbox.text && !strcmp(urlbox.text, target) && xsel.linkclick);
+	clickat(1, 0);
+	assert(!urlbox.text && !strcmp(xsel.primary, "Project"));
+	/* With more text, it starts over after the line. */
+	testmouse_put("\033[1;8H and more");
+	xsel.tclick1.tv_sec -= 1;
+	clickat(1, 0);
+	assert(urlbox.text);
+	clickat(1, 0);
+	assert(!urlbox.text && !strcmp(xsel.primary, "Project"));
+	clickat(1, 0);
+	assert(!urlbox.text && !strcmp(xsel.primary, "Project and more"));
+	clickat(1, 0);
+	assert(urlbox.text && !strcmp(urlbox.text, target));
+	urlboxclose();
+	testmouse_put("\033[1;8H\033[K");
+	xsel.tclick1.tv_sec -= 1;
+	clickat(1, 0);
+	assert(urlbox.text && !strcmp(urlbox.text, target));
+	/* A click at another cell of the label does not continue it. */
+	clickat(2, 0);
+	assert(!urlbox.text);
+	clickat(2, 0);
+	assert(urlbox.text);
+	urlboxclose();
+
+	/* So do further clicks on a plain URL, which the first one copied. */
+	testmouse_put("\033[H\033[2Khttps://example.org/path");
+	xsel.tclick1.tv_sec -= 1;
+	before = owned;
+	clickat(1, 0);
+	assert(owned > before && !strcmp(xsel.primary, "https://example.org/path"));
+	assert(!strcmp(xsel.clipboard, "https://example.org/path"));
+	clickat(1, 0);
+	assert(!strcmp(xsel.primary, "https"));
+	assert(!strcmp(xsel.clipboard, "https://example.org/path"));
+	clickat(1, 0);
+	assert(strcmp(xsel.primary, "https") && !urlbox.text);
+	xsel.tclick1.tv_sec -= 1;
+	clickat(1, 0);
+	assert(!strcmp(xsel.primary, "https://example.org/path"));
+	/* A click at another cell of the URL copies it again. */
+	clickat(2, 0);
+	assert(!strcmp(xsel.primary, "https://example.org/path"));
+	clickat(2, 0);
+	assert(!strcmp(xsel.primary, "https"));
+	/* Once the largest selection is reached, the next click starts over
+	 * by copying the URL again. */
+	{
+		int k;
+
+		urlflashset = 0;
+		tclearurlflash();
+		for (k = 0; k < 16 && !urlflashset; k++)
+			clickat(2, 0);
+		assert(urlflashset && k > 1 && xsel.linkclick && xsel.clicks == 1);
+		assert(!strcmp(xsel.primary, "https://example.org/path"));
+		clickat(2, 0);
+		assert(!strcmp(xsel.primary, "https"));
+	}
+	expect(fd, NULL);
+	urlflashset = 0;
+	tclearurlflash();
+	testmouse_put("\033[H\033[2K");
+
 	/* The bar and both clipboard selections trim boundary spaces while
 	 * preserving internal spaces, semicolons and literal percent signs. */
 	{
@@ -3211,6 +3290,7 @@ testhyperlinkbox(int fd)
 			testmouse_put("\033[H\033]8;;");
 			testmouse_put(padded[i]);
 			testmouse_put("\033\\Project\033]8;;\033\\");
+			xsel.tclick1.tv_sec -= 1; /* not a double click */
 			clickat(1, 0);
 			assert(urlbox.text && !strcmp(urlbox.text, plain));
 			assert(urlbox.width == strlen(plain) && !urlbox.top);
@@ -3244,6 +3324,7 @@ testhyperlinkbox(int fd)
 		press(XK_Escape, 0);
 		before = owned;
 		testmouse_put("\033[H\033]8;;   \033\\Project\033]8;;\033\\");
+		xsel.tclick1.tv_sec -= 1; /* not a double click */
 		clickat(1, 0);
 		assert(!urlbox.text && owned == before);
 		expect(fd, NULL);

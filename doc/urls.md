@@ -7,7 +7,12 @@ Recognize, underline and copy URLs from the screen or history.
 HTTP and HTTPS URLs are underlined on the main screen, alternate screen and
 in scrollback, including soft-wrapped continuations beyond the viewport. A
 plain left click copies the target to both PRIMARY and CLIPBOARD. Dragging
-selects text; Shift-click bypasses URL copying. Application-supplied
+selects text; Shift-click bypasses URL copying. Clicking again at the same
+cell within `doubleclicktimeout` continues as an ordinary multi-click
+selection, replacing PRIMARY with the word and then larger
+`selectionpatterns` matches; CLIPBOARD keeps the URL. A click after the
+largest match starts over by copying the URL again, as does one after the
+sequence ends. Application-supplied
 underline styles take precedence over the overlay.
 
 `urlprefixes` sets recognized schemes and `urlchars` the accepted
@@ -30,6 +35,13 @@ PRIMARY and CLIPBOARD. The URL flashes with inverse colors for
 With the timeout set to zero, it closes immediately.
 Clicking elsewhere dismisses the bar without acting on the terminal beneath
 it. Click the original label again to reopen it.
+
+Clicking again at the same spot of the label within `doubleclicktimeout`
+closes the bar and continues as an ordinary multi-click selection: the
+second click selects the word, and further clicks within
+`tripleclicktimeout` expand through `selectionpatterns` like anywhere else.
+A click after the largest match starts over by revealing the target again,
+as does one after the sequence ends.
 
 Escape closes the bar without sending a key to the child. Typing any
 character closes it and processes that key normally, including Unicode,

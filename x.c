@@ -146,6 +146,7 @@ typedef struct {
 	struct timespec tclick1;
 	int clicks, clickcol, clickrow;
 	uint clickstate;
+	int linkclick; /* the clicks began on a URL or hyperlink's label */
 } XSelection;
 
 /* Font structure */
@@ -1034,6 +1035,7 @@ vimstart(const Arg *arg)
 	/* Discard a mouse gesture begun before keyboard selection took over. */
 	mouseignored |= MOUSE_BUTTONS;
 	mousepasting = 0;
+	xsel.clicks = xsel.linkclick = 0;
 	free(urlclick.text);
 	memset(&urlclick, 0, sizeof(urlclick));
 	tvimstart();
@@ -1292,21 +1294,28 @@ mouseaction(XEvent *e, uint release)
 	return 0;
 }
 
-/* Successive clicks at the same cell expand through unique regex matches. */
+/* Whether a click continues the clicks before it, at the same cell. */
 static int
-clicksnap(int col, int row, uint state, struct timespec now)
+clickcontinues(int col, int row, uint state, struct timespec now)
 {
 	unsigned int timeout = xsel.clicks == 1 ? doubleclicktimeout : tripleclicktimeout;
 
 	state &= ~(Button1Mask | LockMask);
-	if (xsel.clicks && col == xsel.clickcol && row == xsel.clickrow &&
-	    state == xsel.clickstate && TIMEDIFF(now, xsel.tclick1) <= timeout)
+	return xsel.clicks && col == xsel.clickcol && row == xsel.clickrow &&
+	       state == xsel.clickstate && TIMEDIFF(now, xsel.tclick1) <= timeout;
+}
+
+/* Successive clicks at the same cell expand through unique regex matches. */
+static int
+clicksnap(int col, int row, uint state, struct timespec now)
+{
+	if (clickcontinues(col, row, state, now))
 		xsel.clicks = MIN(xsel.clicks + 1, (int)LEN(selectionpatterns) + 2);
 	else
 		xsel.clicks = 1;
 	xsel.clickcol = col;
 	xsel.clickrow = row;
-	xsel.clickstate = state;
+	xsel.clickstate = state & ~(Button1Mask | LockMask);
 	xsel.tclick1 = now;
 	return xsel.clicks == 1 ? 0 : SNAP_REGEX + xsel.clicks - 2;
 }
@@ -1316,11 +1325,28 @@ bpress(XEvent *e)
 {
 	int btn = e->xbutton.button;
 	struct timespec now;
-	int snap;
+	int snap, linksel = 0;
 
 	/* A fresh press starts a new gesture, even if an old release was lost. */
 	mouseignored &= ~buttonmask(btn);
-	if (urlboxmouse(e))
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	/* The first click on a URL copies it, or on a label reveals its target;
+	 * clicking again there selects text like anywhere else, closing any bar. */
+	if (btn != Button1)
+		xsel.linkclick = 0;
+	if (btn == Button1 && xsel.linkclick) {
+		if (clickcontinues(evcol(e), evrow(e), e->xbutton.state, now) &&
+		    !(urlbox.text && (urlboxlayout(), urlboxhit(e)))) {
+			linksel = 1;
+			if (urlbox.text) {
+				urlboxclose();
+				redraw();
+			}
+		} else {
+			xsel.linkclick = 0;
+		}
+	}
+	if (!linksel && urlboxmouse(e))
 		return;
 	/* The wheel scrolls history, also beneath alternate-screen programs
 	 * and the paste boxes, but the text in the paste's full view. */
@@ -1364,11 +1390,18 @@ bpress(XEvent *e)
 	if (btn != Button1)
 		xsel.clicks = 0;
 
-	if (btn == Button1 && match(XK_NO_MOD, e->xbutton.state & ~LockMask) &&
+	if (!linksel && btn == Button1 && match(XK_NO_MOD, e->xbutton.state & ~LockMask) &&
 	    (urlclick.text = tgeturl(evcol(e), evrow(e)))) {
 		xsel.clicks = 0;
 		urlclick.active = 1;
 		urlclick.explicit = thyperlink(evcol(e), evrow(e));
+		/* Further clicks here select, as if this had been the first. */
+		xsel.clicks = 1;
+		xsel.clickcol = evcol(e);
+		xsel.clickrow = evrow(e);
+		xsel.clickstate = e->xbutton.state & ~(Button1Mask | LockMask);
+		xsel.tclick1 = now;
+		xsel.linkclick = 1;
 		urlclick.col = evcol(e);
 		urlclick.row = evrow(e);
 		urlclick.anchorcol = urlclick.col;
@@ -1382,14 +1415,19 @@ bpress(XEvent *e)
 		return;
 	}
 
-	if (mouseaction(e, 0))
+	if (!linksel && mouseaction(e, 0))
 		return;
 
 	if (btn == Button1) {
-		clock_gettime(CLOCK_MONOTONIC, &now);
 		snap = clicksnap(evcol(e), evrow(e), e->xbutton.state, now);
-		/* Once the largest match is selected, the next click starts over. */
+		/* Once the largest match is selected, the next click starts over,
+		 * on a URL or label as a first click on it again. */
 		if (!selstart(evcol(e), evrow(e), snap) && xsel.clicks > 2) {
+			if (linksel) {
+				xsel.clicks = xsel.linkclick = 0;
+				bpress(e);
+				return;
+			}
 			xsel.clicks = 1;
 			selstart(evcol(e), evrow(e), 0);
 		}
