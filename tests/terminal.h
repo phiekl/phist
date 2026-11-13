@@ -5,12 +5,19 @@
 
 char *utmp, *scroll, *stty_args, *vtiden, *termname;
 wchar_t *worddelimiters = L" ";
+/* A blank-separated item of a value, unless it is another KEY= assignment. */
+#define SELVALUEITEM "([^[:space:]A-Za-z_][^[:space:]]*|" \
+	"[A-Za-z_][0-9A-Za-z_]*([^[:space:]=0-9A-Za-z_][^[:space:]]*)?)"
 const char *selectionpatterns[] = {
-	"([0-9A-Za-z][0-9A-Za-z._@-]*[0-9A-Za-z]|[0-9A-Za-z])",
+	"([0-9A-Za-z][0-9A-Za-z._-]*[0-9A-Za-z]|[0-9A-Za-z])",
 	"(((~|\\.{1,2})?/|[0-9A-Za-z_.-]+/)([0-9A-Za-z_.-]+/)*"
 	"([0-9A-Za-z_.-]*[0-9A-Za-z_-]|\\.{1,2})/?)",
+	"([0-9A-Za-z][0-9A-Za-z._@-]*[0-9A-Za-z]|[0-9A-Za-z])",
 	"([A-Za-z_][0-9A-Za-z_]*=[^[:space:]'\"<>]*)",
 	"([0-9A-Za-z][0-9A-Za-z._@,;=[:space:]-]*[0-9A-Za-z][.:]?)",
+	"[A-Za-z_][0-9A-Za-z_]*=([^[:space:]'\"<>]*([^[:space:]'\"<>,;.:!?]|/\\.\\.?))",
+	"([^[:space:]'\"<>]*([^[:space:]'\"<>,;.:!?]|/\\.\\.?))",
+	"^[[:space:]]*[A-Za-z_][0-9A-Za-z_]*=(" SELVALUEITEM "([[:space:]]+" SELVALUEITEM ")+)[[:space:]]*$",
 	"^(.*)$",
 	NULL
 };

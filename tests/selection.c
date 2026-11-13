@@ -88,10 +88,14 @@ main(void)
 	expect(17, 0, 2, "name: './alpha/beta.txt' done");
 	expect(17, 0, 100, "name: './alpha/beta.txt' done");
 
-	/* The smallest word match includes filename and email punctuation. */
+	/* The smallest word match includes filename punctuation; an email
+	 * address or user@host follows its parts. */
 	reset(80, 5);
 	put("<name_1-test@example.org> <a> <./aa/bb>");
-	expect(7, 0, 0, "name_1-test@example.org");
+	expect(7, 0, 0, "name_1-test");
+	expect(7, 0, 1, "name_1-test@example.org");
+	expect(15, 0, 0, "example.org");
+	expect(15, 0, 1, "name_1-test@example.org");
 	expect(27, 0, 0, "a");
 	expect(36, 0, 0, "bb");
 	expect(36, 0, 1, "./aa/bb");
@@ -222,6 +226,42 @@ main(void)
 	expect(5, 0, 0, "!!!");
 	expect(10, 0, 100, "... !!!\n");
 
+	/* user@host in a prompt: either name, then both. */
+	reset(80, 5);
+	put("claude@claude:~/repos/phist (new)$");
+	expect(0, 0, 0, "claude");
+	expect(0, 0, 1, "claude@claude");
+	expect(8, 0, 0, "claude");
+	expect(8, 0, 1, "claude@claude");
+	/* A unit file's value: a part, the value, then the line. */
+	reset(80, 5);
+	put("Requires=systemd-fsck@dev-xvdb.service");
+	expect(2, 0, 0, "Requires");
+	expect(2, 0, 1, "Requires=systemd-fsck@dev-xvdb.service");
+	expect(12, 0, 0, "systemd-fsck");
+	expect(12, 0, 1, "systemd-fsck@dev-xvdb.service");
+	expect(12, 0, 2, "Requires=systemd-fsck@dev-xvdb.service");
+	expect(25, 0, 0, "dev-xvdb.service");
+	expect(25, 0, 1, "systemd-fsck@dev-xvdb.service");
+	expect(25, 0, 2, "Requires=systemd-fsck@dev-xvdb.service");
+	/* Blank-separated items of a value running to the end of the line. */
+	reset(80, 5);
+	put("Documentation=man:fstab(5) man:systemd-fstab-generator(8)");
+	expect(35, 0, 0, "systemd-fstab-generator");
+	expect(35, 0, 1, "man:systemd-fstab-generator(8)");
+	expect(35, 0, 2, "man:fstab(5) man:systemd-fstab-generator(8)");
+	expect(35, 0, 3, "Documentation=man:fstab(5) man:systemd-fstab-generator(8)");
+	expect(19, 0, 1, "man:fstab(5)");
+	/* But not where it holds further assignments, nor URLs cut at '='. */
+	reset(80, 5);
+	put("LC_ALL=C.UTF-8 make CC=cc -j4 all");
+	expect(9, 0, 0, "C.UTF-8");
+	expect(9, 0, 1, "LC_ALL=C.UTF-8");
+	expect(9, 0, 2, "LC_ALL=C.UTF-8 make CC=cc -j4 all");
+	reset(80, 5);
+	put("see http://example.com:8080/path?q=1, ok");
+	expect(28, 0, 2, "http://example.com:8080/path?q=1");
+
 	/* A part of an IPv6 or MAC address, then all of it, then with an IPv6
 	 * prefix length, whichever part is clicked; the prefix length alone,
 	 * then the address with it. */
@@ -275,7 +315,9 @@ main(void)
 	reset(80, 5);
 	put("::ffff:192.0.2.999 ::ffff:192.0.2.1extra ::ffff:1.2.3.4.");
 	expect(2, 0, 1, "ffff:");
+	expect(2, 0, 2, "::ffff:192.0.2.999");
 	expect(21, 0, 1, "ffff:");
+	expect(21, 0, 2, "::ffff:192.0.2.1extra");
 	expect(43, 0, 1, "::ffff:1.2.3.4");
 
 	/* Wrapped addresses are found across rows. */
@@ -287,20 +329,23 @@ main(void)
 	expect(1, 1, 1, "fe80::1/64");
 
 	/* Addresses stand alone, not within words, and must be valid: these
-	 * select as they would without address units. */
+	 * offer no address, only their blank-separated item. */
 	reset(80, 5);
 	put("std::vector deadbeefcafe::1 fe80::1zz 1:2:3:4:5:6:7:8:9 12:34:56");
 	expect(2, 0, 1, "std:");
-	expect(12, 0, 1, "vector deadbeefcafe:");
+	expect(2, 0, 2, "std::vector");
+	expect(12, 0, 1, "deadbeefcafe::1");
 	expect(28, 0, 1, "1 fe80:");
-	expect(38, 0, 1, "1zz 1:");
-	expect(56, 0, 1, "9 12:");
+	expect(28, 0, 2, "fe80::1zz");
+	expect(38, 0, 2, "1:2:3:4:5:6:7:8:9");
+	expect(56, 0, 2, "12:34:56");
 	/* Seven groups are no MAC address, and too long a prefix no prefix. */
 	reset(80, 5);
 	put("aa:bb:cc:dd:ee:ff:00 fe80::1/1280");
 	expect(0, 0, 1, "aa:");
+	expect(0, 0, 2, "aa:bb:cc:dd:ee:ff:00");
 	expect(24, 0, 1, "fe80::1");
-	expect(24, 0, 2, "aa:bb:cc:dd:ee:ff:00 fe80::1/1280");
+	expect(24, 0, 2, "fe80::1/1280");
 	expect(30, 0, 1, "/1280");
 
 	/* Dragging expands by the same match size in either direction. */

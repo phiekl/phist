@@ -18,10 +18,22 @@ The initial pair uses `doubleclicktimeout` (300 ms); later clicks use
 modifiers or dragging resets the sequence.
 
 `selectionpatterns` contains POSIX extended regular expressions; the first
-capture group supplies the selection. Defaults cover words and email
-addresses, paths, assignments, phrases and complete lines. For example,
+capture group supplies the selection. Defaults cover words, words joined
+by `@`, paths, assignments and their values, phrases, blank-separated items,
+values running to the end of a line and complete lines. For example,
 successive selections in `LC_ALL=C.UTF-8` grow from `LC_ALL` to
-`LC_ALL=C.UTF-8` before including neighboring assignments. Paths may be absolute,
+`LC_ALL=C.UTF-8` before including neighboring assignments. In a prompt's
+`claude@claude:~/repos/phist`, clicks on either name select it, then
+`claude@claude`; email addresses likewise select a part first. In
+`Requires=systemd-fsck@dev-xvdb.service`, clicks on `systemd-fsck` select
+it, then the value, then the line. In
+`Documentation=man:fstab(5) man:systemd-fstab-generator(8)`, clicks on
+`systemd-fstab-generator` select it, then
+`man:systemd-fstab-generator(8)`, then the value after `=`, then the line.
+Such a value is offered only for a `KEY=` at the start of a line, and only
+when none of its items is another `KEY=` assignment, so a line of
+environment assignments or a shell command is not treated as one value.
+Items leave out trailing sentence punctuation. Paths may be absolute,
 relative, home-relative or parent-relative, with single-character
 components, final `.` or `..`, and optional trailing slashes. Internal
 filename dots remain selected; sentence-ending periods are excluded.
