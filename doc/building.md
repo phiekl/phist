@@ -72,6 +72,10 @@ long argument lists are not truncated. An inherited `SIG_IGN` for `SIGCHLD`
 is reset so phist can collect the exit status of `stty`. Run
 `LC_ALL=C.UTF-8 sh tests/stty.sh`.
 
+With no shell to hang up, closing the window sends no `SIGHUP`: signalling
+process 0 would reach phist's own process group, its launcher included.
+`tests/shellexit.sh` checks this.
+
 ## Dependencies
 
 Building requires a C compiler and development files for Xlib, Xft, XRender,

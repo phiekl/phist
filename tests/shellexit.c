@@ -13,6 +13,13 @@ enum {
 
 static const char *output;
 static int stalled, failttywrites;
+static volatile sig_atomic_t hangups;
+
+static void
+onhup(int sig)
+{
+	hangups++;
+}
 
 /* Linux takes writes after the shell's end closed, so have it refuse them. */
 long syscall(long, ...);
@@ -234,6 +241,13 @@ main(void)
 	/* Closing the terminal isn't exiting. */
 	assert(run("exec <&- >&- 2>&-; sleep 5", said, sizeof(said)) == 1);
 	assert(strstr(said, "couldn't read from shell: Input/output error"));
+	/* Closing the window on a serial line (-l), with no shell, hangs up
+	 * nothing: pid 0 would signal phist's own process group. */
+	signal(SIGHUP, onhup);
+	pid = 0;
+	ttyhangup();
+	assert(!hangups);
+	signal(SIGHUP, SIG_DFL);
 	puts("PASS: phist exits with its shell's status and without an error");
 	return 0;
 }

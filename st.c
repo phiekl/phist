@@ -3635,8 +3635,12 @@ ttyresize(int tw, int th)
 void
 ttyhangup(void)
 {
-	/* Send SIGHUP to shell */
-	kill(pid, SIGHUP);
+	/*
+	 * Send SIGHUP to the shell. A serial line (-l) has none, and pid 0
+	 * would signal phist's own process group, its launcher included.
+	 */
+	if (pid > 0)
+		kill(pid, SIGHUP);
 }
 
 int
