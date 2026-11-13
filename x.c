@@ -4119,24 +4119,14 @@ kmap(KeySym k, uint state)
 	return NULL;
 }
 
-void
-kpress(XEvent *ev)
+static void
+kpresslookup(XKeyEvent *e, KeySym ksym, char *buf, int len)
 {
-	XKeyEvent *e = &ev->xkey;
-	KeySym ksym = NoSymbol, lower;
-	char buf[64], *customkey;
-	int len;
+	KeySym lower;
+	char *customkey;
 	Rune c;
-	Status status;
 	Shortcut *bp;
 
-	if (xw.ime.xic) {
-		len = XmbLookupString(xw.ime.xic, e, buf, sizeof buf, &ksym, &status);
-		if (status == XBufferOverflow)
-			return;
-	} else {
-		len = XLookupString(e, buf, sizeof buf, &ksym, NULL);
-	}
 	/* Before the shortcuts: Ctrl+V selects a block here. */
 	if (vimkey(ksym, e->state, buf, len))
 		return;
@@ -4179,6 +4169,32 @@ kpress(XEvent *ev)
 		}
 	}
 	sendinput(buf, len, 1);
+}
+
+void
+kpress(XEvent *ev)
+{
+	XKeyEvent *e = &ev->xkey;
+	KeySym ksym = NoSymbol;
+	char buf[64], *text = buf;
+	int len;
+	Status status;
+
+	if (xw.ime.xic) {
+		len = XmbLookupString(xw.ime.xic, e, buf, sizeof buf, &ksym, &status);
+		/* Xlib keeps a longer commit for a retry with room for it. */
+		if (status == XBufferOverflow) {
+			text = xmalloc(len);
+			len = XmbLookupString(xw.ime.xic, e, text, len, &ksym, &status);
+			if (status == XBufferOverflow)
+				len = 0;
+		}
+	} else {
+		len = XLookupString(e, buf, sizeof buf, &ksym, NULL);
+	}
+	kpresslookup(e, ksym, text, len);
+	if (text != buf)
+		free(text);
 }
 
 /* Accept close requests only in WM_PROTOCOLS format for this window. */

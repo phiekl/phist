@@ -160,6 +160,24 @@ XLookupString(XKeyEvent *e, char *buf, int size, KeySym *key, XComposeStatus *st
 	return strlen(lookuptext);
 }
 
+/* An input method reports a commit too long for the buffer, to be retried. */
+static int mblookups;
+int
+XmbLookupString(XIC ic, XKeyPressedEvent *e, char *buf, int size, KeySym *key, Status *status)
+{
+	int len = strlen(lookuptext);
+
+	mblookups++;
+	*key = lookupkey;
+	if (len > size) {
+		*status = XBufferOverflow;
+		return len;
+	}
+	memcpy(buf, lookuptext, len);
+	*status = len ? XLookupChars : XLookupNone;
+	return len;
+}
+
 /* A mouse binding that is not a paste, e.g. one sending Enter. */
 static int mousecalls;
 static void othermouse(const Arg *a) { mousecalls++; }
@@ -3968,6 +3986,32 @@ testinputmethodlost(void)
 	puts("PASS: a lost input method leaves nothing to use, or what replaced it");
 }
 
+/* A commit longer than the first lookup buffer reaches the shell whole. */
+static void
+testlongcommit(int fd)
+{
+	static const char longtext[] =
+		"\346\274\242\345\255\227\346\274\242\345\255\227"
+		"\346\274\242\345\255\227\346\274\242\345\255\227"
+		"\346\274\242\345\255\227\346\274\242\345\255\227"
+		"\346\274\242\345\255\227\346\274\242\345\255\227"
+		"\346\274\242\345\255\227\346\274\242\345\255\227"
+		"\346\274\242\345\255\227\346\274\242\345\255\227";
+
+	assert(sizeof(longtext) - 1 > 64);
+	xw.ime.xic = (XIC)&icfocused;
+	lookuptext = longtext;
+	mblookups = 0;
+	pressnow(NoSymbol, 0);
+	assert(mblookups == 2);
+	expect(fd, longtext);
+	lookuptext = "x";
+	pressnow(NoSymbol, 0);
+	expect(fd, "x");
+	xw.ime.xic = NULL;
+	puts("PASS: an input method commit longer than the lookup buffer is sent whole");
+}
+
 int
 main(void)
 {
@@ -3998,6 +4042,7 @@ main(void)
 	testrequests(sockets[1]);
 	testendlessdrain();
 	testinputmethodlost();
+	testlongcommit(sockets[1]);
 	testclipfailure();
 	testdialog(sockets[1]);
 	testpresentationfallback(sockets[1]);

@@ -170,3 +170,8 @@ A replacement input context receives focus immediately if the window is
 already focused. An input-method restart does not produce a new
 `FocusIn` event, so waiting for one would leave the context unfocused
 until the user switched windows.
+
+A commit longer than the 64-byte lookup buffer is not dropped. Xlib
+reports `XBufferOverflow` with the length it needs and keeps the text, so
+phist looks it up again in a buffer of that size, as
+XmbLookupString(3) describes.
