@@ -93,10 +93,16 @@ standard output. Applications can only start, stop or trigger printing with
 Media Copy sequences (CSI i) when this option is given.
 .TP
 .BI \-T " title"
-defines the window title (default 'phist').
+defines the window title. It defaults to the command phist runs, as given
+with
+.B \-e
+or after the options, or else 'phist', also with
+.BR \-l .
+An application setting an empty title restores this one.
 .TP
 .BI \-t " title"
-defines the window title (default 'phist').
+is the same as
+.BR \-T .
 .TP
 .BI \-w " windowid"
 embeds phist within the window identified by

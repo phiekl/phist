@@ -4,6 +4,11 @@ Keep application titles suitable for task bars and window lists.
 
 ## Length and line breaks
 
+Without `-T` or `-t`, the title is the command phist runs, as given with
+`-e` or after the options, so `phist vim notes` starts as `vim`. A shell,
+or a serial line with `-l`, starts as `phist`. An empty title from an
+application, or `ESC k ESC \`, restores this title. See `phist(1)`.
+
 An OSC 0/1/2 title is everything after the first semicolon, so
 `printf '\033]2;hello;world\a'` sets `hello;world`; only the opcode before
 it is a separate argument. A legacy `ESC k` title has no opcode and is the
