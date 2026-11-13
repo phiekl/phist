@@ -4,9 +4,9 @@
  * SECONDS bounds the whole seed, including all episodes.
  *
  * Exercises malformed escapes and UTF-8, resizes, history, selections and URLs.
- * Check state bounds after each operation and wide/dummy pairs after each
- * episode. Pairing mismatches remain warnings because erase and insert
- * operations can split wide cells.
+ * Check state bounds and wide/dummy pairs after each operation, and pairs
+ * across the whole history after each episode. A pairing mismatch fails
+ * the seed once it ends, after up to ten are reported.
  *
  * SIGALRM reports the current step and a stack trace before _exit().
  * Sanitizer findings, assertion failures and hangs fail the run.
@@ -357,22 +357,21 @@ do_urls(void)
 /* ---- invariants ---- */
 
 static volatile sig_atomic_t step;
-static int pairwarnings;
+static int pairfailures;
 
 static void
-pairwarn(const char *what, int x, int y)
+pairfail(const char *what, int x, int y)
 {
-	if (pairwarnings++ < 10)
-		fprintf(stderr, "warning: step %d: %s at %d,%d "
+	if (pairfailures++ < 10)
+		fprintf(stderr, "pairing: step %d: %s at %d,%d "
 		        "(size %dx%d, history %d, view %d)\n",
 		        step, what, x, y, term.col, term.row,
 		        sb.len, sb.view_offset);
 }
 
 /*
- * Structural bounds must hold unconditionally (assert).  Wide/dummy
- * pairing is only warned about: upstream erase and insert operations
- * leave half of a wide glyph behind when they cover only the other half.
+ * Structural bounds must hold unconditionally (assert). Wide/dummy pairs
+ * are counted, so that one run reports where several broke.
  */
 static void
 checkinvariants(int fullview)
@@ -397,10 +396,10 @@ checkinvariants(int fullview)
 		for (x = 0; x < term.col; x++) {
 			if ((line[x].mode & ATTR_WIDE) && x + 1 < term.col &&
 			    !(line[x + 1].mode & ATTR_WDUMMY))
-				pairwarn("wide glyph without dummy cell", x, y);
+				pairfail("wide glyph without dummy cell", x, y);
 			if ((line[x].mode & ATTR_WDUMMY) &&
 			    !(x > 0 && (line[x - 1].mode & ATTR_WIDE)))
-				pairwarn("dummy cell without wide glyph", x, y);
+				pairfail("dummy cell without wide glyph", x, y);
 		}
 	}
 }
@@ -509,8 +508,8 @@ main(int argc, char **argv)
 		checkinvariants(1);
 	}
 
-	fprintf(stderr, "fuzz: seed %llu done, %d steps, %d pairing warnings\n",
-	        (unsigned long long)seed, step, pairwarnings);
+	fprintf(stderr, "fuzz: seed %llu done, %d steps, %d pairing failures\n",
+	        (unsigned long long)seed, step, pairfailures);
 	fflush(NULL);
-	_exit(0);
+	_exit(pairfailures ? 1 : 0);
 }

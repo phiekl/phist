@@ -222,6 +222,7 @@ static void tdumpsel(void);
 static void tdumpline(Line);
 static void tdump(void);
 static void tclearregion(int, int, int, int);
+static void tfixwide(int, int);
 static void tcursor(int);
 static void tdeletechar(int);
 static void tdeleteline(int);
@@ -4119,6 +4120,42 @@ tclearregion(int x1, int y1, int x2, int y2)
 			gp->u = ' ';
 			linkset(gp, 0);
 		}
+		/* A wide glyph cut by either edge loses its other half too. */
+		tfixwide(y, x1);
+		tfixwide(y, x2 + 1);
+	}
+}
+
+/*
+ * Blank whichever half of a wide glyph lost its other half at the
+ * boundary between columns x-1 and x of row y, as after cells were
+ * erased, inserted or deleted there: a wide glyph at x-1 without its dummy
+ * cell at x, or a dummy cell at x without its wide glyph at x-1.
+ */
+void
+tfixwide(int y, int x)
+{
+	Glyph *line = term.line[y];
+
+	if (x > 0 && x <= term.col && (line[x-1].mode & ATTR_WIDE) &&
+	    (x == term.col || !(line[x].mode & ATTR_WDUMMY))) {
+		if (selected(x-1, screenrow(y)))
+			selclear();
+		line[x-1].u = ' ';
+		line[x-1].mode &= ~(ATTR_WIDE | ATTR_ALTPRES);
+		linkset(&line[x-1], 0);
+		tdirtyscreen(y, y);
+		urls.dirty = 1;
+	}
+	if (x >= 0 && x < term.col && (line[x].mode & ATTR_WDUMMY) &&
+	    (x == 0 || !(line[x-1].mode & ATTR_WIDE))) {
+		if (selected(x, screenrow(y)))
+			selclear();
+		line[x].u = ' ';
+		line[x].mode &= ~ATTR_WDUMMY;
+		linkset(&line[x], 0);
+		tdirtyscreen(y, y);
+		urls.dirty = 1;
 	}
 }
 
@@ -4126,6 +4163,7 @@ void
 tdeletechar(int n)
 {
 	int dst, src, size, x;
+	unsigned int link = 0;
 	Glyph *line;
 
 	LIMIT(n, 0, term.col - term.c.x);
@@ -4141,9 +4179,21 @@ tdeletechar(int n)
 		for (x = dst; x < src; x++)
 			if (line[x].link == line[src].link &&
 			    (line[x].mode & ATTR_LINKSTART))
-				line[src].mode |= ATTR_LINKSTART;
+				link = line[src].link;
+	/* Blank the deleted cells first, so the halves of wide glyphs they cut
+	 * are blanked too instead of joining halves of other glyphs. */
+	if (n)
+		tclearregion(dst, term.c.y, src - 1, term.c.y);
+	/* The suffix starts after a cut dummy cell blanked just now. */
+	if (link) {
+		x = src + (line[src].link != link);
+		if (x < term.col && line[x].link == link)
+			line[x].mode |= ATTR_LINKSTART;
+	}
 	linkmove(&line[dst], &line[src], size);
 	tclearregion(term.col-n, term.c.y, term.col-1, term.c.y);
+	/* The cells now meeting at the cursor may be halves of two glyphs. */
+	tfixwide(term.c.y, dst);
 }
 
 void
@@ -4161,6 +4211,8 @@ tinsertblank(int n)
 
 	linkmove(&line[dst], &line[src], size);
 	tclearregion(src, term.c.y, dst - 1, term.c.y);
+	/* A wide glyph pushed to the last column lost its dummy cell. */
+	tfixwide(term.c.y, term.col);
 }
 
 void
@@ -5970,7 +6022,7 @@ void
 tputc(Rune u)
 {
 	char c[UTF_SIZ];
-	int control;
+	int control, inserted = 0;
 	int width, len;
 	Glyph *gp;
 
@@ -6085,6 +6137,7 @@ check_control_code:
 	if (IS_SET(MODE_INSERT) && term.c.x+width < term.col) {
 		linkmove(gp+width, gp, term.col - term.c.x - width);
 		gp->mode &= ~ATTR_WIDE;
+		inserted = 1;
 	}
 
 	if (term.c.x+width > term.col) {
@@ -6122,6 +6175,12 @@ check_control_code:
 			gp[1].mode = ATTR_WDUMMY;
 			linkset(&gp[1], gp->link);
 		}
+	}
+	if (inserted) {
+		/* As tinsertblank: the moved cells may have lost a half at
+		 * either end. */
+		tfixwide(term.c.y, term.c.x + width);
+		tfixwide(term.c.y, term.col);
 	}
 	if (term.c.x+width < term.col) {
 		tmoveto(term.c.x+width, term.c.y);

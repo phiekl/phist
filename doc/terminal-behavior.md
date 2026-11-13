@@ -24,6 +24,15 @@ this sequence at each byte boundary and preserves existing styling.
 Overwriting a wide character tests `ATTR_WIDE` as a bit, including on styled
 cells. A new wide glyph one column before an existing styled wide glyph
 clears that displaced glyph's trailing dummy instead of leaving an orphan.
+Deleting (DCH), inserting (ICH or typing in insert mode) or erasing (ECH,
+EL, ED) cells likewise blanks the other half of a wide glyph they cut, as
+xterm does: `printf 'A\347\225\214B\r\033[2C\033[P'` leaves `A B`, not
+the wide glyph marked wide beside `B`. A wide glyph pushed into the last
+column, with no room for its dummy cell, is blanked too. A deletion that
+cuts two wide glyphs blanks both leftover halves before the line moves, so
+`printf 'A\347\225\214\350\252\236B\r\033[2C\033[2P'` leaves `A  B` rather
+than joining the halves of different glyphs into one. Blanking a selected
+half outside the edited cells ends the selection.
 
 These fixes address fuzz-discovered charset reads past the table, wide cell
 overwrites and signed parameter overflow. Run `LC_ALL=C.UTF-8 sh

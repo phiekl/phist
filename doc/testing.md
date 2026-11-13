@@ -29,8 +29,10 @@ URL queries with seeded random input. It includes malformed escapes and
 UTF-8, extreme CSI parameters, OSC payloads and one-cell dimensions.
 Incomplete UTF-8 is kept across writes as in `ttyread()`, and payloads stay
 within their buffers. Bounds on terminal state, saved cursors and history
-are checked after every operation even with `NDEBUG`. Episode boundaries
-scan all live and history rows for wide/dummy pairing issues.
+are checked after every operation even with `NDEBUG`, as are wide/dummy
+pairs on the screen; episode boundaries check them in all live and history
+rows. A wide glyph without its dummy cell, or a dummy cell without its
+glyph, fails the seed; the first ten are reported.
 
 ```sh
 LC_ALL=C.UTF-8 sh tests/fuzz.sh
@@ -53,8 +55,8 @@ CC=gcc CFLAGS='-g -O1 -fsanitize=address,undefined -fsanitize-recover=address,si
 ```
 
 Sanitizer findings and abnormal exits fail the run; sanitizer summaries are
-preserved and failure filtering uses portable extended regexes. Wide/dummy
-mismatches from erase and insert operations remain warnings. The charset,
-wide-overwrite and CSI-overflow findings have been fixed; see [parser
-bounds](terminal-behavior.md#parser-bounds). Sanitizer reports for those
+preserved and failure filtering uses portable extended regexes. Erasing,
+inserting or deleting half of a wide glyph blanks its other half, so pairs
+stay whole. The charset, wide-overwrite and CSI-overflow findings have been
+fixed; see [parser bounds](terminal-behavior.md#parser-bounds). Sanitizer reports for those
 cases are failures, not expected results.

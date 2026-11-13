@@ -1,6 +1,7 @@
 #include "terminal.h"
 
 #define WIDE "\344\270\255" /* U+4E2D, two columns */
+#define WIDE2 "\350\252\236" /* U+8A9E, two columns */
 
 /* Run put(text) with stderr captured; return what was printed. */
 static char *
@@ -144,6 +145,61 @@ main(void)
 	line = term.line[0];
 	assert((line[0].mode & ATTR_WIDE) && (line[1].mode & ATTR_WDUMMY));
 	assert(!(line[2].mode & ATTR_WDUMMY) && line[2].u == ' ');
+
+	/* Deleting, inserting or erasing half a wide glyph blanks the other
+	 * half rather than leave a wide glyph without its dummy cell or a
+	 * dummy cell without its glyph. */
+	{
+		static const char *const ops[] = {
+			"\r\033[2C\033[P", /* DCH on the dummy cell */
+			"\r\033[C\033[P",  /* DCH on the glyph */
+			"\r\033[2C\033[@", /* ICH on the dummy cell */
+			"\r\033[2C\033[X", /* ECH on the dummy cell */
+			"\r\033[C\033[X",  /* ECH on the glyph */
+			"\r\033[2C\033[K", /* EL from the dummy cell */
+			"\r\033[2C\033[1K", /* EL up to the glyph */
+		};
+		int i, x;
+
+		for (i = 0; i < (int)LEN(ops); i++) {
+			put("\033[H\033[2JA" WIDE "B");
+			put(ops[i]);
+			line = term.line[0];
+			for (x = 0; x < term.col; x++) {
+				assert(!(line[x].mode & ATTR_WIDE) ||
+				       (x + 1 < term.col && (line[x+1].mode & ATTR_WDUMMY)));
+				assert(!(line[x].mode & ATTR_WDUMMY) ||
+				       (x > 0 && (line[x-1].mode & ATTR_WIDE)));
+				assert(line[x].u != 0x4e2d);
+			}
+		}
+		/* The reported case: the glyph goes, B moves up beside it. */
+		put("\033[H\033[2JA" WIDE "B\r\033[2C\033[P");
+		assert(line[0].u == 'A' && line[1].u == ' ' && line[2].u == 'B');
+		/* ICH pushing a wide glyph into the last column blanks it. */
+		put("\033[H\033[2J12345678" WIDE "\r\033[@");
+		assert(!(line[9].mode & ATTR_WIDE) && line[9].u == ' ' && line[8].u == '8');
+		/* A wide glyph moved whole keeps its pair. */
+		put("\033[H\033[2JAB" WIDE "C\r\033[P");
+		assert(line[0].u == 'B' && (line[1].mode & ATTR_WIDE) &&
+		       (line[2].mode & ATTR_WDUMMY) && line[3].u == 'C');
+		/* Deleting across two wide glyphs does not join the remaining
+		 * halves of different glyphs into one. */
+		put("\033[H\033[2JA" WIDE WIDE2 "B\r\033[2C\033[2P");
+		assert(line[0].u == 'A' && line[1].u == ' ' && line[2].u == ' ' &&
+		       line[3].u == 'B');
+		for (x = 0; x < 4; x++)
+			assert(!(line[x].mode & (ATTR_WIDE | ATTR_WDUMMY)));
+		/* Blanking a selected half outside the edit ends the selection. */
+		put("\033[H\033[2JA" WIDE "B");
+		selstart(1, 0, 0);
+		selextend(1, 0, SEL_REGULAR, 0);
+		selextend(1, 0, SEL_REGULAR, 1);
+		assert(sel.ob.x != -1);
+		put("\r\033[2C\033[X");
+		assert(line[1].u == ' ' && sel.ob.x == -1);
+		puts("PASS: character edits keep wide glyphs whole");
+	}
 
 	/* Out-of-range parameters clamp instead of overflowing. */
 	put("\033[3;3H\033[-2147483648A");
