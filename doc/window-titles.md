@@ -4,6 +4,12 @@ Keep application titles suitable for task bars and window lists.
 
 ## Length and line breaks
 
+An OSC 0/1/2 title is everything after the first semicolon, so
+`printf '\033]2;hello;world\a'` sets `hello;world`; only the opcode before
+it is a separate argument. A legacy `ESC k` title has no opcode and is the
+whole string, so `printf '\033khello;world\033\\'` sets `hello;world`
+too. `tests/sequences.sh` checks both.
+
 Titles from OSC 0/1/2 and legacy `ESC k` are limited to 512 bytes without
 splitting a UTF-8 sequence. C0 control characters, including tabs and
 newlines, become spaces. U+2028 LINE SEPARATOR and U+2029 PARAGRAPH

@@ -241,6 +241,24 @@ main(void)
 	close(fds[0]);
 	close(fds[1]);
 
+	/* A title is the whole payload after the opcode, semicolons included. */
+	put("\033]2;hello;world\a");
+	assert(!strcmp(lasttitle, "hello;world"));
+	put("\033]0;a;b;c;d;e;f;g;h;i;j;k;l;m;n;o;p;q\a");
+	assert(!strcmp(lasttitle, "a;b;c;d;e;f;g;h;i;j;k;l;m;n;o;p;q"));
+	assert(!strcmp(lasticontitle, lasttitle));
+	put("\033]1;icon;name\033\\");
+	assert(!strcmp(lasticontitle, "icon;name"));
+	put("\033];no;number\a");
+	assert(!strcmp(lasttitle, "no;number"));
+	put("\033]2;;lead\a");
+	assert(!strcmp(lasttitle, ";lead"));
+	/* Without a separator there is no title to set; other OSCs still split. */
+	put("\033]2\a");
+	assert(!strcmp(lasttitle, ";lead"));
+	put("\033]02;zero padded;ok\a");
+	assert(!strcmp(lasttitle, "zero padded;ok"));
+
 	/* Titles stay on one line and are cut at a UTF-8 boundary. */
 	put("\033]0;evil\r\nroot@host: ~\t$\a");
 	assert(!strcmp(lasttitle, "evil  root@host: ~ $"));
@@ -257,6 +275,11 @@ main(void)
 	assert(!strcmp(lasttitle, "old style"));
 	put("\033k\033\\");
 	assert(!strcmp(lasttitle, ""));
+	/* Semicolons stay in the old title sequence as in OSC titles. */
+	put("\033khello;world\033\\");
+	assert(!strcmp(lasttitle, "hello;world"));
+	put("\033k;lead;\033\\");
+	assert(!strcmp(lasttitle, ";lead;"));
 	/* Unicode line and paragraph separators break lines as well. */
 	put("\033]0;first\342\200\250second\342\200\251third\a");
 	assert(!strcmp(lasttitle, "first second third"));

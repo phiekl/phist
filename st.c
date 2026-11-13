@@ -212,6 +212,7 @@ static void osc_link(char *, size_t);
 static int eschandle(Rune);
 static void strdump(void);
 static void strhandle(void);
+static int osctitle(void);
 static void strparse(void);
 static char *strtitle(char *);
 static void strreset(void);
@@ -5051,6 +5052,41 @@ strnumber(const char *s)
 	return value;
 }
 
+/*
+ * Set the window or icon title of OSC 0, 1 or 2, and return 1, or return 0
+ * for any other OSC. The title is everything after the first semicolon:
+ * semicolons are part of it, so take it before strparse() splits the
+ * payload into arguments.
+ */
+static int
+osctitle(void)
+{
+	char *title, *semi;
+	int par;
+
+	strescseq.buf[strescseq.len] = '\0';
+	if (!(semi = memchr(strescseq.buf, ';', strescseq.len)))
+		return 0;
+	/* No number at all is 0, as in OSC ;title. */
+	*semi = '\0';
+	par = semi == strescseq.buf ? 0 : strnumber(strescseq.buf);
+	*semi = ';';
+	title = semi + 1;
+	switch (par) {
+	case 0:
+		xsettitle(strtitle(title));
+		xseticontitle(title);
+		return 1;
+	case 1:
+		xseticontitle(strtitle(title));
+		return 1;
+	case 2:
+		xsettitle(strtitle(title));
+		return 1;
+	}
+	return 0;
+}
+
 void
 strhandle(void)
 {
@@ -5085,6 +5121,14 @@ strhandle(void)
 		osc_link(strescseq.buf + 2, strescseq.len - 2);
 		return;
 	}
+	if (strescseq.type == ']' && osctitle())
+		return;
+	/* The old title sequence is a title alone, semicolons included. */
+	if (strescseq.type == 'k') {
+		strescseq.buf[strescseq.len] = '\0';
+		xsettitle(strtitle(strescseq.buf));
+		return;
+	}
 	strparse();
 	/* No number at all is 0, as in OSC ;title. */
 	par = (narg = strescseq.narg) && *strescseq.args[0] ? strnumber(strescseq.args[0]) : 0;
@@ -5098,18 +5142,9 @@ strhandle(void)
 			linkset(&term.c.attr, 0);
 			return;
 		case 0:
-			if (narg > 1) {
-				xsettitle(strtitle(strescseq.args[1]));
-				xseticontitle(strescseq.args[1]);
-			}
-			return;
 		case 1:
-			if (narg > 1)
-				xseticontitle(strtitle(strescseq.args[1]));
-			return;
 		case 2:
-			if (narg > 1)
-				xsettitle(strtitle(strescseq.args[1]));
+			/* A title without its separator; osctitle() took the rest. */
 			return;
 		case 52: /* manipulate selection data */
 			if (narg > 2 && allowwindowops) {
@@ -5187,9 +5222,6 @@ strhandle(void)
 			return;
 		}
 		break;
-	case 'k': /* old title set compatibility */
-		xsettitle(strtitle(strescseq.args[0]));
-		return;
 	case 'P': /* DCS -- Device Control String */
 	case '_': /* APC -- Application Program Command */
 	case '^': /* PM -- Privacy Message */
