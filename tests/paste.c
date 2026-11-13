@@ -906,6 +906,25 @@ static const struct {
 		{ 'p', "DANGER → SPACE, TAB → 4x SPACE", BYTES("    x    y") },
 		{ 't', "DANGER → SPACE, keep TAB", BYTES("\tx\ty") },
 		{ 'k', "Keep DANGER, keep TAB", BYTES("\tx\033\ty") } } },
+	/* s drops all backslashes ending a line, with blanks and DANGER among
+	 * and after them, so none escapes the joining space; others are kept,
+	 * also at the very end without a line break. */
+	{ BYTES("a \\\nb"), PASTE_BLUE, 1, 0, 0, 0, {
+		{ 's', "LF → SPACE, drop line-end \\", BYTES("a b") },
+		{ 'p', "Keep LF", BYTES("a \\\rb") } } },
+	{ BYTES("make\\\\\r\nx\\ y\\\nz\\"), PASTE_YELLOW, 1, 0, 1, 0, {
+		{ 's', "LF|CRLF → SPACE, drop line-end \\", BYTES("make x\\ y z\\") },
+		{ 'p', "Keep LF, CRLF → LF", BYTES("make\\\\\rx\\ y\\\rz\\") },
+		{ 'k', "Keep LF, keep CRLF", BYTES("make\\\\\r\rx\\ y\\\rz\\") } } },
+	{ BYTES("a \\\t\\\033 \nb"), PASTE_RED, 1, 1, 0, 1, {
+		{ 's', "LF|TAB|DANGER → SPACE, drop line-end \\, squeeze all space",
+		  BYTES("a b") },
+		{ 'p', "DANGER → SPACE, keep LF, trim trailing space, TAB → 4x SPACE",
+		  BYTES("a \\    \\\rb") },
+		{ 't', "DANGER → SPACE, keep LF, trim trailing space, keep TAB",
+		  BYTES("a \\\t\\\rb") },
+		{ 'k', "Keep DANGER, keep LF, keep trailing space, keep TAB",
+		  BYTES("a \\\t\\\033 \rb") } } },
 	/* Bytes outside valid UTF-8, here Latin-1, are DANGER. */
 	{ BYTES("caf\xe9 au lait\n"), PASTE_RED, 1, 0, 0, 1, {
 		{ 's', "LF|DANGER → SPACE, squeeze all space, trim surrounding space",

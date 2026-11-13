@@ -27,6 +27,7 @@ enum {
 	PASTE_TRIM = 8,     /* blanks were trimmed */
 	PASTE_SQUEEZE = 16, /* runs of spaces became one (s) */
 	PASTE_KEEPLF = 32,  /* LF was kept */
+	PASTE_JOINED = 64,  /* a backslash before a line break was dropped (s) */
 };
 typedef struct {
 	char key; /* one of pastekeys */
@@ -430,7 +431,7 @@ static size_t
 pastetransform(int mode, char *out, int *done)
 {
 	size_t i, n, m, len = 0;
-	int class, squeezed = 0;
+	int class, squeezed = 0, joined;
 
 	*done = 0;
 	for (i = 0; i < paste.len; i += n) {
@@ -445,7 +446,19 @@ pastetransform(int mode, char *out, int *done)
 			squeezed = 0;
 		} else if (mode == PASTE_SAFE) {
 			/* One line: every blank and DANGER becomes a space, runs of
-			 * them become one and none is left at either end. */
+			 * them become one and none is left at either end. All
+			 * backslashes ending a line are dropped, with the spaces
+			 * among and after them, so none escapes the space joining
+			 * the lines. */
+			if (class == PASTE_ISLF || class == PASTE_ISCRLF) {
+				joined = 0;
+				for (m = len; m && (out[m - 1] == '\\' || out[m - 1] == ' '); m--)
+					joined |= out[m - 1] == '\\';
+				if (joined) {
+					len = m;
+					*done |= PASTE_JOINED;
+				}
+			}
 			if (!len)
 				*done |= PASTE_TRIM;
 			else if (out[len - 1] == ' ')
@@ -608,6 +621,8 @@ pasteoptions(void)
 				strcat(label, kinds[i].name);
 			}
 			strcat(label, " → SPACE");
+			if (done & PASTE_JOINED)
+				strcat(label, ", drop line-end \\");
 			if (done & PASTE_SQUEEZE)
 				strcat(label, ", squeeze all space");
 			if (done & PASTE_TRIM)

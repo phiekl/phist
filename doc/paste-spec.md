@@ -46,9 +46,13 @@ Dialog color:
 
 `s` mode:
 
-1. Replace CR, LF, TAB and DANGER characters with spaces.
-2. Collapse each run of spaces to one space.
-3. Trim leading and trailing spaces, including indentation.
+1. Drop every backslash at the end of a line, i.e. in the run of
+   backslashes, spaces, TAB and DANGER characters directly before LF or
+   CRLF, so that none can escape the space joining the lines. A backslash
+   at the very end of the paste, without a line break, is kept.
+2. Replace CR, LF, TAB and DANGER characters with spaces.
+3. Collapse each run of spaces to one space.
+4. Trim leading and trailing spaces, including indentation.
 
 `p` mode:
 
@@ -110,6 +114,7 @@ no final period. Omit transformations that leave the text unchanged.
 
 - <CHARACTER_TYPE>[|<CHARACTER_TYPE>].. → SPACE (types present, in the
   count table order)
+- drop line-end `\`
 - squeeze all space (only for runs inside the text; a run at the end is
   just trimmed)
 - trim surrounding space

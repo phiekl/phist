@@ -27,7 +27,7 @@ separate danger class.
 
 | Choice | Treatment |
 | --- | --- |
-| S | Join into one line, replacing special characters with spaces, squeezing spaces and trimming both ends |
+| S | Join into one line, dropping all backslashes that end lines, replacing special characters with spaces, squeezing spaces and trimming both ends |
 | P | Keep lines, normalize CRLF, expand tabs to four spaces, remove dangerous runs and trim trailing whitespace |
 | T | Like P, retaining tabs; offered when tabs exist |
 | K | Keep the original; offered when it differs from P and T, with an additional No/Yes confirmation |
