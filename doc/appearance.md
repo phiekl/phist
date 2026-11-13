@@ -122,7 +122,8 @@ missing fonts, fitting, styles, cache reuse and alignment.
 Colors beyond the palette, such as RGB, reversed and faint colors, are
 allocated when a text run is drawn. On colormapped visuals, drawn pixels
 still reference their color cells, so phist caches up to 128 colors and
-redraws the screen when recycling them. Other visuals release temporary
+redraws the screen when recycling them. RGB underline colors share that
+cache there, rather than the small one other visuals reuse them from. Other visuals release temporary
 colors after drawing. Allocation failure uses the default foreground or
 background, or leaves faint text undimmed.
 The fixed colors of concealed text, dialogs and bars use the

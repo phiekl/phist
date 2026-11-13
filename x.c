@@ -275,11 +275,13 @@ xclearunderlinecolors(void)
 	underlinecolors.next = 0;
 }
 
+static Color *xkeptcolor(const XRenderColor *, Color *);
+
 static unsigned long
 xunderlinepixel(uint32_t rgb, unsigned long fallback)
 {
 	unsigned int i;
-	Color color;
+	Color color, kept = { .pixel = fallback };
 	XRenderColor value = { .red = ((rgb >> 16) & 255) * 257,
 		.green = ((rgb >> 8) & 255) * 257,
 		.blue = (rgb & 255) * 257, .alpha = 0xffff };
@@ -288,6 +290,10 @@ xunderlinepixel(uint32_t rgb, unsigned long fallback)
 		return fallback;
 	if (!IS_TRUECOL(rgb))
 		return dc.col[rgb].pixel;
+	/* Drawn underlines keep using a colormap's cells: recycle those only
+	 * when the whole screen is drawn again, as for other drawn colors. */
+	if (xw.colormapped)
+		return xkeptcolor(&value, &kept)->pixel;
 	for (i = 0; i < LEN(underlinecolors.entries); i++)
 		if (underlinecolors.entries[i].valid && underlinecolors.entries[i].rgb == rgb)
 			return underlinecolors.entries[i].color.pixel;

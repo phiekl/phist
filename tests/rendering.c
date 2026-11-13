@@ -518,6 +518,19 @@ testtempcolors(void)
 	xdrawglyphfontspecs(&spec, base, 1, 1, 1);
 	assert(!keptcolorsfull);
 	failalloc = 0;
+	/* Underline colors are kept with them, rather than evicted from their
+	 * own small cache while drawn underlines still use the cells. */
+	allocations = frees = 0;
+	for (i = 0; i < 100; i++)
+		assert(xunderlinepixel(TRUECOLOR(i, 2, 3), 0) == ((i << 16) | 0x0203));
+	for (i = 0; i < 100; i++)
+		assert(xunderlinepixel(TRUECOLOR(i, 2, 3), 0) == ((i << 16) | 0x0203));
+	assert(allocations == 100 && !frees && nkeptcolors == 100);
+	assert(!underlinecolors.entries[0].valid);
+	keptcolorsfull = 1;
+	testrender_clean();
+	assert(xstartdraw() && frees == 100 && !nkeptcolors && testrender_alldirty());
+	testrender_clean();
 	xw.colormapped = 0;
 	win.mode = 0;
 	allocations = frees = 0;
