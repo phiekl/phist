@@ -368,9 +368,11 @@ static void searchmarks(void);
 
 static struct {
 	int mode; /* VIM_NORMAL and up, or 0 outside the mode */
-	int count, originlive, searchdir;
+	int count, originlive, searchdir, dragsnap, dragvalid;
 	Rune pending, find, findkind;
 	SearchPos pos, anchor;
+	/* The ends of what the last click selected, for a drag from it. */
+	SearchPos dragfrom, dragto;
 	uint64_t origin;
 } vim;
 
@@ -1607,23 +1609,28 @@ vimadd(uint64_t row, int n)
 	return row + n;
 }
 
-/* Follow rows moved by output, including both ends of a visual selection.
- * Clip to the region when text can be lost at either margin. */
+/* Follow one position when output moves its row, clipping lost text. */
+static void
+vimscrollpoint(SearchPos *point, uint64_t first, uint64_t last, int n, int clip)
+{
+	if (!BETWEEN(point->row, first, last))
+		return;
+	point->row = vimadd(point->row, n);
+	if (clip)
+		LIMIT(point->row, first, last);
+}
+
+/* Follow output with the cursor, visual anchor and mouse gesture. */
 static void
 vimscrollrows(uint64_t first, uint64_t last, int n, int clip)
 {
-	SearchPos *points[] = { &vim.pos, &vim.anchor };
-	int i;
-
 	if (!vim.mode)
 		return;
-	for (i = 0; i < (vim.mode > VIM_NORMAL ? 2 : 1); i++) {
-		if (!BETWEEN(points[i]->row, first, last))
-			continue;
-		points[i]->row = vimadd(points[i]->row, n);
-		if (clip)
-			LIMIT(points[i]->row, first, last);
-	}
+	vimscrollpoint(&vim.pos, first, last, n, clip);
+	if (vim.mode > VIM_NORMAL)
+		vimscrollpoint(&vim.anchor, first, last, n, clip);
+	vimscrollpoint(&vim.dragfrom, first, last, n, clip);
+	vimscrollpoint(&vim.dragto, first, last, n, clip);
 }
 
 /* Keep the cursor on a character and in view, and the selection on it. */
@@ -2160,6 +2167,92 @@ tvimstart(void)
 	/* A drag in progress must not end by replacing what gets selected. */
 	if (sel.mode != SEL_IDLE)
 		selclear();
+	vimupdate();
+}
+
+/* A left click at a cell of the view moves the cursor there, ending a
+ * visual selection. Repeated clicks select what they would outside the
+ * mode, as a visual selection; return 0 if one could not grow it. */
+int
+tvimclick(int col, int row, int snap)
+{
+	uint64_t top = searchtop();
+
+	if (!vim.mode)
+		return 0;
+	LIMIT(col, 0, term.col - 1);
+	LIMIT(row, 0, term.row - 1);
+	vim.pending = vim.count = 0;
+	if (col > 0 && (viewline(row)[col].mode & ATTR_WDUMMY))
+		col--;
+	if (snap) {
+		/* The selection from the click before tells whether this grew. */
+		if (!selstart(col, row, snap))
+			return 0;
+		vim.anchor.row = top + sel.nb.y;
+		vim.anchor.x = sel.nb.x;
+		vim.pos.row = top + sel.ne.y;
+		vim.pos.x = sel.ne.x;
+		vim.mode = VIM_VISUAL;
+	} else {
+		selclear();
+		vim.mode = VIM_NORMAL;
+		vim.pos.row = top + row;
+		vim.pos.x = col;
+		vim.anchor = vim.pos;
+	}
+	vim.dragsnap = snap;
+	vimupdate();
+	vim.dragfrom = vim.anchor;
+	vim.dragto = vim.pos;
+	vim.dragvalid = 1;
+	return 1;
+}
+
+/* Dragging selects from the press, or from the far end of what the clicks
+ * selected, to the cell under the pointer, in blocks if asked. */
+void
+tvimdrag(int col, int row, int block)
+{
+	SearchPos p, anchor;
+	int mode = block ? VIM_BLOCK : VIM_VISUAL;
+	int direction, oldsnap;
+
+	if (!vim.mode || !vim.dragvalid ||
+	    !BETWEEN(vim.dragfrom.row, sb.base, vimlast()) ||
+	    !BETWEEN(vim.dragto.row, sb.base, vimlast()))
+		return;
+	LIMIT(col, 0, term.col - 1);
+	LIMIT(row, 0, term.row - 1);
+	if (col > 0 && (viewline(row)[col].mode & ATTR_WDUMMY))
+		col--;
+	p.row = searchtop() + row;
+	p.x = col;
+	if (vim.mode == VIM_NORMAL && !searchcmp(p, vim.dragfrom) &&
+	    !searchcmp(p, vim.dragto))
+		return;
+	/* Keep the clicked range until the pointer leaves it. Outside it,
+	 * grow by the same word, regex or line unit as the original click. */
+	direction = searchcmp(p, vim.dragfrom) < 0 ? -1 : 1;
+	anchor = direction < 0 ? vim.dragto : vim.dragfrom;
+	if (searchcmp(p, vim.dragfrom) >= 0 && searchcmp(p, vim.dragto) <= 0) {
+		p = vim.dragto;
+	} else if (vim.dragsnap) {
+		oldsnap = sel.snap;
+		sel.snap = vim.dragsnap;
+		selsnap(&col, &row, direction);
+		sel.snap = oldsnap;
+		p.row = searchtop() + row;
+		p.x = col;
+	}
+	if (p.x > 0 && (viewline(vimy(p.row))[p.x].mode & ATTR_WDUMMY))
+		p.x--;
+	if (vim.mode == mode && !searchcmp(p, vim.pos) &&
+	    !searchcmp(anchor, vim.anchor))
+		return;
+	vim.anchor = anchor;
+	vim.pos = p;
+	vim.mode = mode;
 	vimupdate();
 }
 
@@ -6693,6 +6786,7 @@ tresize(int col, int row)
 	/* Reflow invalidates absolute rows, so stay at the same place on screen. */
 	if (vim.mode) {
 		vim.mode = VIM_NORMAL;
+		vim.dragvalid = 0;
 		vim.origin = searchtop();
 		vim.pos.row = searchtop() + MIN(MAX(viewrow, 0), term.row - 1);
 		if (!search.active)

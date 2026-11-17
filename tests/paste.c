@@ -504,6 +504,36 @@ drag(int col, int row, int tocol, int torow)
 	mouseat(ButtonRelease, Button1, tocol, torow);
 }
 
+/* What is selected, which must be this. */
+#define expectsel(want) expectselection(__LINE__, want)
+static void
+expectselection(int source, const char *want)
+{
+	char *text = getsel();
+
+	if (!text || strcmp(text, want))
+		fprintf(stderr, "line %d: selection: \"%s\", expected \"%s\"\n", source,
+		        text ? text : "(none)", want);
+	assert(text && !strcmp(text, want));
+	free(text);
+}
+
+/* Mouse events with modifiers held. */
+static void
+mousewith(int type, uint button, int col, int row, uint state)
+{
+	XEvent e = { .xbutton = { .type = type, .window = xw.win, .button = button,
+	             .x = borderpx + col * win.cw, .y = borderpx + row * win.ch,
+	             .state = state } };
+
+	if (type == ButtonPress)
+		bpress(&e);
+	else if (type == ButtonRelease)
+		brelease(&e);
+	else
+		bmotion(&e);
+}
+
 /* Click Button1 at a cell, without moving. */
 static void
 clickat(int col, int row)
@@ -2782,7 +2812,7 @@ static void
 testsearchinput(int fd)
 {
 	char longquery[SEARCH_MAX + 32];
-	int fault, before, index;
+	int fault, before, index, i;
 
 	resizewindow(80, 5);
 	tresize(80, 5);
@@ -2939,12 +2969,30 @@ testsearchinput(int fd)
 	expect(fd, NULL);
 
 	/* Abandoning an outstanding selection must not paste into the child
-	 * after search ends. Mouse releases cannot trigger paste underneath. */
+	 * after search ends, from the mouse as from the keys. Mouse bindings
+	 * work as without the bar, and pastes go to the query. */
+	for (i = 0; i < 2; i++) {
+		press(XK_slash, ControlMask);
+		before = requests;
+		if (i) {
+			press(XK_Insert, ShiftMask);
+		} else {
+			mouseat(ButtonPress, Button2, 0, 0);
+			mouseat(ButtonRelease, Button2, 0, 0);
+		}
+		assert(requests == before + 1 && paste.state == PASTE_WAIT);
+		press(XK_Escape, 0);
+		assert(!tsearchactive() && paste.state == PASTE_IDLE);
+		{
+			XEvent late = { .xselection = { .type = SelectionNotify,
+			               .requestor = requestedwindow, .selection = requested,
+			               .target = xsel.xtarget, .property = requestedproperty,
+			               .time = requestedtime } };
+			selnotify(&late);
+		}
+		expect(fd, NULL);
+	}
 	press(XK_slash, ControlMask);
-	before = requests;
-	mouseat(ButtonPress, Button2, 0, 0);
-	mouseat(ButtonRelease, Button2, 0, 0);
-	assert(requests == before);
 	{
 		uint button = mshortcuts[0].button;
 		int calls = mousecalls;
@@ -2952,21 +3000,43 @@ testsearchinput(int fd)
 		mshortcuts[0].func = othermouse;
 		mshortcuts[0].button = Button4;
 		wheel(Button4);
-		assert(mousecalls == calls);
+		assert(mousecalls == calls + 1 && tsearchactive());
 		mshortcuts[0].func = selpaste;
 		mshortcuts[0].button = button;
 	}
-	press(XK_Insert, ShiftMask);
-	assert(paste.state == PASTE_WAIT);
 	press(XK_Escape, 0);
-	assert(!tsearchactive() && paste.state == PASTE_IDLE);
+	assert(!tsearchactive());
+	expect(fd, NULL);
+
+	/* With the bar open the mouse selects and copies as without it, and
+	 * the bar stays open, but a click on the bar itself does nothing. */
+	testmouse_put("\033[H\033[2Jalpha beta");
+	press(XK_slash, ControlMask);
+	searchinsert("zzz", 3);
+	presentframe();
+	before = owned;
+	drag(0, 0, 4, 0);
+	assert(tsearchactive() && owned == before + 1 && !strcmp(xsel.primary, "alpha"));
+	clickat(7, 0);
+	clickat(7, 0);
+	assert(tsearchactive() && !strcmp(xsel.primary, "beta"));
+	assert(searchbarh > 0 && searchbartop + searchbarh == win.h);
 	{
-		XEvent late = { .xselection = { .type = SelectionNotify,
-		               .requestor = requestedwindow, .selection = requested,
-		               .target = xsel.xtarget, .property = requestedproperty,
-		               .time = requestedtime } };
-		selnotify(&late);
+		XEvent e = { .xbutton = { .type = ButtonPress, .window = xw.win,
+		             .button = Button1, .x = borderpx, .y = searchbartop } };
+
+		before = owned;
+		bpress(&e);
+		e.xbutton.type = MotionNotify;
+		e.xbutton.x += 3 * win.cw;
+		bmotion(&e);
+		e.xbutton.type = ButtonRelease;
+		brelease(&e);
+		assert(owned == before && !strcmp(xsel.primary, "beta"));
+		assert(tsearchactive() && !strcmp(searchtext, "zzz"));
 	}
+	press(XK_Escape, 0);
+	assert(!tsearchactive());
 	expect(fd, NULL);
 
 	/* Confirmed multiline data uses the chosen paste transformation. */
@@ -3627,7 +3697,8 @@ testsearchcolors(void)
 static void
 testvimkeys(int fd)
 {
-	int before, labelh;
+	int before, labelh, i, row, sawline = 0;
+	char *text;
 
 	/* The settings apply, apart from the search bar's colors. */
 	vimtintcolor = 0x102030;
@@ -3771,16 +3842,100 @@ testvimkeys(int fd)
 	assert(tvimcursor(6, tvimrow()));
 	vimtype("0");
 
-	/* The mouse reaches nothing but the wheel beneath the mode. */
+	/* Beneath the mode the wheel scrolls, and buttons but the left do
+	 * nothing, not even paste. */
 	before = owned;
-	clickat(3, 1);
-	drag(0, 0, 4, 0);
+	mouseat(ButtonPress, Button2, 3, 1);
+	mouseat(ButtonRelease, Button2, 3, 1);
+	mouseat(ButtonPress, Button3, 3, 1);
+	mouseat(ButtonRelease, Button3, 3, 1);
 	assert(tvimactive() == VIM_NORMAL && owned == before && !urlbox.text);
-	assert(!getsel());
+	assert(paste.state == PASTE_IDLE && !getsel());
 	wheel(Button4);
 	assert(tvimactive() == VIM_NORMAL);
+	wheel(Button5);
+
+	/* A click moves the cursor, staying in the mode. */
+	vimtype("5");
+	clickat(3, 1);
+	assert(tvimactive() == VIM_NORMAL && tvimcursor(3, 1) && !getsel());
+	vimtype("l");
+	assert(tvimcursor(4, 1)); /* the click dropped the count */
+	/* A drag selects visually, for the keys to adjust and copy. */
+	drag(0, 0, 4, 0);
+	assert(tvimactive() == VIM_VISUAL && tvimcursor(4, 0));
+	expectsel("alpha");
+	assert(owned == before);
+	presentframe();
+	assert(dialogrow(" VISUAL ") == -1);
+	vimtype("e");
+	expectsel("alpha beta");
+	/* A click ends it; dragging back from the press selects backwards. */
+	clickat(2, 1);
+	assert(tvimactive() == VIM_NORMAL && tvimcursor(2, 1) && !getsel());
+	drag(4, 1, 0, 1);
+	expectsel("gamma");
+	vimtype("o");
+	assert(tvimcursor(4, 1));
+	/* Alt drags a block, like outside the mode. */
+	mousewith(ButtonPress, Button1, 1, 0, Mod1Mask);
+	mousewith(MotionNotify, 0, 2, 1, Mod1Mask | Button1Mask);
+	mousewith(ButtonRelease, Button1, 2, 1, Mod1Mask | Button1Mask);
+	assert(tvimactive() == VIM_BLOCK);
+	expectsel("lp\nam");
+	/* Repeated clicks select what they would outside it, from the word to
+	 * the line, and then start over. */
+	clickat(7, 0);
+	clickat(7, 0);
+	assert(tvimactive() == VIM_VISUAL && tvimcursor(9, 0));
+	expectsel("beta");
+	for (i = 0; i < 20 && tvimactive() == VIM_VISUAL; i++) {
+		text = getsel();
+		if (!strcmp(text, "alpha beta"))
+			sawline = 1;
+		free(text);
+		clickat(7, 0);
+	}
+	assert(sawline && tvimactive() == VIM_NORMAL && tvimcursor(7, 0));
+	/* A drag after them keeps what they selected, from its far end. */
+	clickat(8, 1);
+	mouseat(ButtonPress, Button1, 8, 1);
+	mouseat(MotionNotify, 0, 0, 0);
+	mouseat(ButtonRelease, Button1, 0, 0);
+	expectsel("alpha beta\ngamma delta");
+	assert(owned == before);
+	/* Leaving keeps the copy to the keys: y copies and leaves. */
+	vimtype("y");
+	assert(!tvimactive() && owned == before + 2);
+	assert(!strcmp(xsel.primary, "alpha beta\ngamma delta"));
+
+	/* Clicks do nothing with the search bar open, and work after it. */
+	press(XK_v, ControlMask | Mod1Mask);
+	before = owned;
+	vimtype("/");
+	vimtype("gam");
+	drag(0, 1, 4, 1);
+	assert(tsearchactive() && tvimactive() == VIM_NORMAL);
+	press(XK_Return, 0);
+	assert(!tsearchactive() && tvimactive() == VIM_NORMAL);
+	row = tvimrow();
+	drag(0, row, 4, row);
+	assert(tvimactive() == VIM_VISUAL);
+	expectsel("gamma");
+	assert(owned == before);
+	press(XK_Escape, 0);
 	press(XK_Escape, 0);
 	assert(!tvimactive());
+	kscrolldown(&(Arg){ .i = 1000 });
+
+	/* A drag the mode ended beneath selects nothing, then or afterwards. */
+	press(XK_v, ControlMask | Mod1Mask);
+	mouseat(ButtonPress, Button1, 0, 0);
+	vimtype("q");
+	assert(!tvimactive());
+	mouseat(MotionNotify, 0, 4, 0);
+	mouseat(ButtonRelease, Button1, 4, 0);
+	assert(owned == before && !getsel());
 	press(XK_v, ControlMask | Mod1Mask);
 
 	/* A copy goes to PRIMARY and CLIPBOARD, and ends the mode. Nothing
@@ -4029,6 +4184,90 @@ testvimheldbuttons(int fd)
 	expect(fd, NULL);
 }
 
+/* Fresh gestures recover from lost releases; bars consume their own clicks. */
+static void
+testmousegestureedges(int fd)
+{
+	int before, ft, b, h;
+	MouseShortcut saved = mshortcuts[0];
+
+	lookuptext = "";
+	resizewindow(80, 5);
+	tresize(80, 5);
+	testmouse_put("\033[H\033[2Jalpha beta");
+	press(XK_v, ControlMask | Mod1Mask);
+	/* Clicking the visible label must leave the cursor and mode alone. */
+	assert(vimbar);
+	searchbarsize(&ft, &b, &h);
+	before = tvimrow();
+	{
+		XEvent e = { .xbutton = { .type = ButtonPress, .window = xw.win,
+		             .button = Button1, .x = borderpx, .y = win.h - h } };
+
+		bpress(&e);
+		e.xbutton.type = ButtonRelease;
+		brelease(&e);
+		assert(tvimrow() == before && !vimdragging && vimbar);
+	}
+	mouseat(ButtonPress, Button1, 0, 0);
+	mouseat(MotionNotify, 0, 3, 0);
+	assert(vimdragging);
+	vimtype("q");
+	/* No release for the previous gesture arrives. */
+	drag(0, 0, 4, 0);
+	assert(!vimdragging && !strcmp(xsel.primary, "alpha"));
+
+	/* A mode change from a click must not cover the next click. */
+	testmouse_put("\033[5;1Halpha beta");
+	press(XK_v, ControlMask | Mod1Mask);
+	vimtype("h");
+	clickat(1, 4);
+	clickat(1, 4);
+	expectsel("alpha");
+	clickat(1, 4);
+	expectsel("alpha beta");
+	vimtype("q");
+
+	/* Release shortcuts stay suppressed throughout a vim gesture. */
+	mshortcuts[0].button = Button1;
+	mshortcuts[0].mod = XK_ANY_MOD;
+	mshortcuts[0].release = 1;
+	mshortcuts[0].func = othermouse;
+	press(XK_v, ControlMask | Mod1Mask);
+	before = mousecalls;
+	drag(0, 0, 4, 0);
+	assert(mousecalls == before);
+	vimtype("q");
+	drag(0, 0, 4, 0);
+	assert(mousecalls == before + 1);
+	mshortcuts[0].button = saved.button;
+	mshortcuts[0].mod = saved.mod;
+	mshortcuts[0].release = saved.release;
+	mshortcuts[0].func = saved.func;
+
+	/* Hit testing recomputes layout even before the first search frame,
+	 * and again when the current match moves the bar to the top. */
+	testmouse_put("\033[H\033[2Jalpha beta\033[5;1Hbottom");
+	tsearchstart();
+	searchbartop = 0;
+	searchbarh = h;
+	before = owned;
+	mouseat(ButtonPress, Button1, 0, 4);
+	mouseat(ButtonRelease, Button1, 0, 4);
+	assert(owned == before && searchbartop == win.h - h);
+	drag(0, 0, 4, 0);
+	assert(owned == before + 1 && !strcmp(xsel.primary, "alpha"));
+	tsearchset("bottom");
+	before = owned;
+	clickat(0, 0);
+	assert(owned == before && searchbartop == 0);
+	drag(0, 4, 5, 4);
+	assert(owned == before + 1 && !strcmp(xsel.primary, "bottom"));
+	tsearchend(0);
+	lookuptext = "x";
+	expect(fd, NULL);
+}
+
 /* Nothing keeps using what went with a lost input method. */
 static void
 testinputmethodlost(void)
@@ -4150,6 +4389,7 @@ main(void)
 	testvimkeys(sockets[1]);
 	testvimdrag(sockets[1]);
 	testvimheldbuttons(sockets[1]);
+	testmousegestureedges(sockets[1]);
 	testrestoredshortcuts(sockets[1]);
 	vbellfree();
 	free(display);

@@ -53,6 +53,10 @@ terminal output.
 - Paste shortcuts, Shift+Insert by default, insert into the query, using the
   usual paste confirmation when needed. Search input is never sent to the
   child process.
+- The mouse works as it does without the bar, which stays open: dragging or
+  clicking selects and copies, clicking URLs works, and the middle button
+  pastes into the query. Clicks on the bar itself do nothing. A selection
+  shows over highlighted matches, reversing their colors.
 
 The search bar is styled like the paste dialog. Its sunken query field
 shows a hint when empty. The right side shows the current match and total,

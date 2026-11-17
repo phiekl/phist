@@ -105,8 +105,7 @@ A wide character is one step for `h` and `l`, so `2h` goes where `hh` does.
 
 Ctrl+U and Ctrl+D move half a screen, Ctrl+B, Ctrl+F, Page Up and Page Down
 nearly a whole one. Ctrl+Y and Ctrl+E scroll by a row, leaving the cursor where
-it is unless that would put it out of view. The wheel also scrolls; clicks do
-nothing.
+it is unless that would put it out of view. The wheel also scrolls.
 
 `v` selects text, `V` whole lines, and Ctrl+V a block. Pressing another of them
 changes the kind, the same one ends the selection, and `o` jumps to its other
@@ -115,6 +114,16 @@ mode, keeping the selection highlighted as after a drag. Without a selection,
 `yy` or `Y` copies the logical line, or several with a count; soft wraps do
 not consume the count. Whole lines always end in a newline when copied, even if
 the last one fills the width.
+
+The left button works within the mode. A click moves the cursor, ending a
+selection, and a drag selects from where it started, in a block while Alt is
+held. Repeated clicks select what they would [outside the
+mode](#expanding-a-selection), from the word to the line, and a drag after
+them keeps that and extends it from its far end, using the same selection
+unit. Releasing the button copies nothing, so the keys can still adjust the
+selection before `y` copies it.
+Clicks on the mode label or while the search bar is open do nothing. The
+other buttons and configured mouse shortcut bindings do nothing in the mode.
 
 Escape ends the selection, then the mode. `q`, `i`, `a` and Ctrl+C leave at
 once. Leaving returns to the view the mode started from.

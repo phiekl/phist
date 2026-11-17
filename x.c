@@ -517,6 +517,8 @@ xlazycolor(Color *color, int *loaded, const XRenderColor *value, Color *fallback
 
 static char searchtext[SEARCH_MAX];
 static size_t searchlen;
+/* Current search bar layout, shared by drawing and mouse hit testing. */
+static int searchbartop, searchbarh;
 
 static void
 searchstart(const Arg *arg)
@@ -916,6 +918,33 @@ searchcaps(int i, int col, int draw, Color *fg)
 	return x - 1 - col;
 }
 
+/* Place the bar above a current match that it would cover at the bottom. */
+static void
+searchbarlayout(int *ft, int *b)
+{
+	int x, y, cols = win.tw / win.cw, rows = win.th / win.ch;
+
+	searchbarsize(ft, b, &searchbarh);
+	searchbartop = win.h - searchbarh;
+	for (y = MAX(0, (searchbartop - borderpx) / win.ch); y < rows; y++)
+		for (x = 0; x < cols; x++)
+			if (tsearchmatch(x, y) == SEARCH_CURRENT) {
+				searchbartop = 0;
+				return;
+			}
+}
+
+static int
+searchbarhit(XEvent *e)
+{
+	int ft, b;
+
+	if (!tsearchactive())
+		return 0;
+	searchbarlayout(&ft, &b);
+	return BETWEEN(e->xbutton.y, searchbartop, searchbartop + searchbarh - 1);
+}
+
 /* Draw the query, status and key caps in a padded search bar. Drop key groups
  * in priority order until the field fits its hint. Move the bar to the top
  * if it would cover the current match; pasteshift places text off the grid. */
@@ -938,7 +967,7 @@ searchdraw(void)
 	int cols = win.tw / win.cw, rows = win.th / win.ch;
 	int shown[LEN(searchkeys)];
 	int full, field, pad, fieldw, room, capsw, width = 0, statusw, count, index;
-	int ft, b, h, top, y, x, k, covered = 0;
+	int ft, b, h, top, y, x, k;
 
 	if (!tsearchactive() || cols < 1 || rows < 1)
 		return;
@@ -982,15 +1011,9 @@ searchdraw(void)
 		tail += n;
 	}
 
-	searchbarsize(&ft, &b, &h);
-	/* Move the bar to the top if it would cover the match, including in
-	 * live output. */
-	top = win.h - h;
-	for (y = MAX(0, (top - borderpx) / win.ch); y < rows && !covered; y++)
-		for (x = 0; x < cols && !covered; x++)
-			covered = tsearchmatch(x, y) == SEARCH_CURRENT;
-	if (covered)
-		top = 0;
+	searchbarlayout(&ft, &b);
+	top = searchbartop;
+	h = searchbarh;
 	y = top + b + ft;
 	pasteshift = y - borderpx;
 
@@ -1023,6 +1046,8 @@ searchdraw(void)
 
 /* Whether the bar with keyboard selection's mode shows. */
 static int vimbar;
+/* Whether Button1 went down inside keyboard selection and is still held. */
+static int vimdragging;
 
 /* Keyboard selection takes every key, with those of Vim's own meaning
  * translated here; st.c does the rest. Only font bindings still work. */
@@ -1038,6 +1063,7 @@ vimstart(const Arg *arg)
 	xsel.clicks = xsel.linkclick = 0;
 	free(urlclick.text);
 	memset(&urlclick, 0, sizeof(urlclick));
+	vimdragging = 0;
 	tvimstart();
 	vimbar = 1;
 	redraw();
@@ -1242,21 +1268,27 @@ evrow(XEvent *e)
 	return y / win.ch;
 }
 
+/* Selection modifiers have the same meaning in either input mode. */
+static int
+mouseselectiontype(uint state)
+{
+	int type;
+
+	state &= ~(Button1Mask | forcemousemod);
+	for (type = 1; type < LEN(selmasks); type++)
+		if (match(selmasks[type], state))
+			return type;
+	return SEL_REGULAR;
+}
+
 void
 mousesel(XEvent *e, int done)
 {
-	int type, seltype = SEL_REGULAR;
-	uint state = e->xbutton.state & ~(Button1Mask | forcemousemod);
+	int seltype = mouseselectiontype(e->xbutton.state);
 
 	if (evcol(e) != xsel.clickcol || evrow(e) != xsel.clickrow)
 		xsel.clicks = 0;
 
-	for (type = 1; type < LEN(selmasks); ++type) {
-		if (match(selmasks[type], state)) {
-			seltype = type;
-			break;
-		}
-	}
 	selextend(evcol(e), evrow(e), seltype, done);
 	if (done)
 		setsel(getsel(), e->xbutton.time);
@@ -1321,6 +1353,55 @@ clicksnap(int col, int row, uint state, struct timespec now)
 	return xsel.clicks == 1 ? 0 : SNAP_REGEX + xsel.clicks - 2;
 }
 
+/* The mode label covers the same bottom strip as the search bar. */
+static int
+vimbarhit(XEvent *e)
+{
+	int ft, b, h;
+
+	if (win.tw / win.cw < 1 || win.th / win.ch < 1)
+		return 0;
+	searchbarsize(&ft, &b, &h);
+	return BETWEEN(e->xbutton.y, win.h - h, win.h - 1);
+}
+
+/* Button1 in keyboard selection moves its cursor and selects within it,
+ * leaving the copy to its keys. */
+static void
+vimpress(XEvent *e, struct timespec now)
+{
+	int col = evcol(e), row = evrow(e), mode = tvimactive();
+
+	/* Once the largest match is selected, the next click starts over. */
+	if (!tvimclick(col, row, clicksnap(col, row, e->xbutton.state, now))) {
+		xsel.clicks = 1;
+		tvimclick(col, row, 0);
+	}
+	vimdragging = 1;
+	/* Leave the clicked cell accessible to the rest of the click sequence. */
+	vimbar = tvimactive() != mode && !vimbarhit(e);
+}
+
+static void
+vimmotion(XEvent *e)
+{
+	if (!tvimactive() || tsearchactive()) {
+		/* The mode or the gesture ended under the button: ignore the rest. */
+		vimdragging = 0;
+		mouseignored |= Button1Mask;
+		return;
+	}
+	if (evcol(e) == xsel.clickcol && evrow(e) == xsel.clickrow && xsel.clicks)
+		return;
+	/* Dragging starts the click sequence over, as outside the mode. */
+	xsel.clicks = 0;
+	if (vimbar) {
+		vimbar = 0;
+		tfulldirt();
+	}
+	tvimdrag(evcol(e), evrow(e), mouseselectiontype(e->xbutton.state) == SEL_RECTANGULAR);
+}
+
 void
 bpress(XEvent *e)
 {
@@ -1330,6 +1411,8 @@ bpress(XEvent *e)
 
 	/* A fresh press starts a new gesture, even if an old release was lost. */
 	mouseignored &= ~buttonmask(btn);
+	if (btn == Button1)
+		vimdragging = 0;
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	/* The first click on a URL copies it, or on a label reveals its target;
 	 * clicking again there selects text like anywhere else, closing any bar. */
@@ -1356,7 +1439,7 @@ bpress(XEvent *e)
 		a.i = MAX(1, mousescrolllines);
 		xsel.clicks = 0;
 		/* Not even its release reaches a binding beneath them. */
-		if (pastemodal() || tsearchactive() || tvimactive())
+		if (pastemodal() || tvimactive())
 			mouseignored |= buttonmask(btn);
 		if (pastewheel(btn == Button4 ? -a.i : a.i))
 			return;
@@ -1383,7 +1466,13 @@ bpress(XEvent *e)
 		}
 		return;
 	}
-	if (tsearchactive() || tvimactive()) {
+	if (btn == Button1 && tvimactive() && !tsearchactive() && !(vimbar && vimbarhit(e))) {
+		vimpress(e, now);
+		return;
+	}
+	/* Beneath the search bar the mouse works as without it, but the bar
+	 * itself takes clicks, as does the one keyboard selection opens. */
+	if (tvimactive() || searchbarhit(e)) {
 		mouseignored |= buttonmask(btn);
 		return;
 	}
@@ -1741,6 +1830,12 @@ brelease(XEvent *e)
 		mouseignored &= ~buttonmask(btn);
 		return;
 	}
+	if (btn == Button1 && vimdragging) {
+		vimmotion(e);
+		vimdragging = 0;
+		mouseignored &= ~Button1Mask;
+		return;
+	}
 	if (mousepasting & buttonmask(btn)) {
 		mousepasting &= ~buttonmask(btn);
 		pastemouseaction(e, 1);
@@ -1786,6 +1881,10 @@ bmotion(XEvent *e)
 		return;
 	if ((mouseignored | mousepasting) & Button1Mask)
 		return;
+	if (vimdragging) {
+		vimmotion(e);
+		return;
+	}
 	if (urlclick.active) {
 		if (!urlclick.text || evcol(e) != urlclick.col || evrow(e) != urlclick.row) {
 			free(urlclick.text);
@@ -3942,10 +4041,6 @@ xdrawline(Line line, int x1, int y1, int x2)
 		newurl = turl(x, y1);
 		if (newurl)
 			new.mode |= ATTR_URL;
-		if (selected(x, y1))
-			new.mode ^= ATTR_REVERSE;
-		if (tvimcursor(x, y1))
-			new.mode ^= ATTR_REVERSE;
 		if ((match = tsearchmatch(x, y1))) {
 			new.fg = rgbtruecolor(match == SEARCH_CURRENT ? searchmatchtextcolor :
 			                      searchothermatchtextcolor);
@@ -3953,6 +4048,11 @@ xdrawline(Line line, int x1, int y1, int x2)
 			                      searchothermatchcolor);
 			new.mode &= ~(ATTR_REVERSE | ATTR_BLINK | ATTR_FAINT | ATTR_INVISIBLE);
 		}
+		/* A selection shows over the matches, reversing their colors. */
+		if (selected(x, y1))
+			new.mode ^= ATTR_REVERSE;
+		if (tvimcursor(x, y1))
+			new.mode ^= ATTR_REVERSE;
 		if (i > 0 && (ATTRCMP(base, new) || url != newurl)) {
 			xdrawglyphfontspecs(specs, base, i, ox, y1);
 			specs += i;

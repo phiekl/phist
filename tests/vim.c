@@ -875,6 +875,66 @@ teststress(void)
 	}
 }
 
+/* Mouse anchors stay on glyphs and retain the unit selected by clicks. */
+static void
+testmouseanchors(void)
+{
+	char *want;
+	int row;
+
+	screen(40, 5, "界abc");
+	tvimclick(1, 0, 0);
+	assert(tvimcursor(0, 0));
+	tvimdrag(2, 0, 0);
+	expectsel("界a");
+	memset(term.dirty, 0, term.row * sizeof(*term.dirty));
+	tvimdrag(2, 0, 0);
+	for (row = 0; row < term.row; row++)
+		assert(!term.dirty[row]);
+	/* Modifier changes still update a stationary drag. */
+	tvimdrag(2, 0, 1);
+	assert(tvimactive() == VIM_BLOCK);
+	expectsel("界a");
+
+	screen(40, 5, "alpha beta\r\ngamma delta");
+	tvimclick(2, 0, 0);
+	tvimclick(2, 0, SNAP_REGEX);
+	expectsel("alpha");
+	tvimdrag(1, 0, 0);
+	expectsel("alpha");
+	tvimdrag(7, 0, 0);
+	expectsel("alpha beta");
+	tvimdrag(3, 0, 0);
+	expectsel("alpha");
+
+	/* Compare line-sized regex drags with ordinary mouse selection,
+	 * including dragging back before the initially clicked line. */
+	tvimend();
+	selstart(2, 0, SNAP_REGEX + 1);
+	selextend(1, 1, SEL_REGULAR, 0);
+	want = getsel();
+	tvimstart();
+	tvimclick(2, 0, SNAP_REGEX + 1);
+	tvimdrag(1, 1, 0);
+	expectsel(want);
+	free(want);
+	tvimclick(2, 1, SNAP_REGEX + 1);
+	tvimdrag(1, 0, 0);
+	expectsel("alpha beta\ngamma delta");
+	tvimend();
+
+	/* Resizing cancels a drag whose snapped range reached the old margin. */
+	screen(40, 5, "alpha");
+	tvimclick(20, 0, SNAP_REGEX);
+	tresize(10, 5);
+	tvimdrag(7, 0, 0);
+	assert(tvimactive() == VIM_NORMAL && !getsel());
+	tvimclick(0, 0, 0);
+	tvimdrag(4, 0, 0);
+	expectsel("alpha");
+	tvimend();
+}
+
 int
 main(void)
 {
@@ -893,6 +953,7 @@ main(void)
 	testearliersearch();
 	testsearchcounts();
 	teststress();
+	testmouseanchors();
 	puts("PASS: keyboard selection motions, counts, visual modes, wrapped and wide text, history, live output, screens, resizing, search and random keys");
 	return 0;
 }

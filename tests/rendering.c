@@ -732,6 +732,17 @@ main(void)
 		searchmatchtextcolor = 0x000000;
 		searchothermatchcolor = 0x705818;
 		searchothermatchtextcolor = 0xffe4a0;
+		/* A selection made with the bar open shows over the matches,
+		 * reversing their colors, but not over the text around them. */
+		testrender_marks();
+		selstart(12, 0, 0);
+		selextend(15, 0, SEL_REGULAR, 0);
+		xdrawline(line, 0, 0, 20);
+		assert(painted[12] == 0x6f5717 && backgrounds[12] == 0xfee39f);
+		assert(backgrounds[13] == colors[defaultfg].pixel);
+		assert(painted[14] == 0xfeef27 && backgrounds[14] == 0);
+		assert(painted[16] == 0 && backgrounds[16] == 0xfeef27);
+		selclear();
 		tsearchend(0);
 		win.mode &= ~MODE_BLINK;
 		free(xw.specbuf);

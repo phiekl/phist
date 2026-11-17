@@ -169,6 +169,8 @@ enum {
 };
 void tvimstart(void);
 void tvimend(void);
+int tvimclick(int, int, int);
+void tvimdrag(int, int, int);
 int tvimkey(Rune, int);
 int tvimactive(void);
 int tvimrow(void);
